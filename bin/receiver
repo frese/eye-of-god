@@ -1,0 +1,79 @@
+#!/usr/local/bin/ruby
+#----------------------------------------------------------------------------------------
+# receiver:
+#----------------------------------------------------------------------------------------
+require 'rubygems'
+require 'stomp'
+require 'pp'
+require "logger"
+require "timeout"
+require "yaml"
+
+module Receiver
+
+    #----------------------------------------------
+    # Read the configuration file
+    hostname = %x[hostname].chomp
+    $god = YAML.load_file($0.sub(/receiver$/, "../config/god.#{hostname}.yaml")) rescue
+    $god = YAML.load_file($0.sub(/receiver$/, "../config/god.yaml"))
+
+    # set default activeMQ servers
+    @queue_server = $god['queue']['server']
+    @queue_port   = $god['queue']['port']
+    @queue_name   = $god['queue']['name']
+
+    debug=false
+    while (! ARGV[0].nil? and ARGV[0].match("^-")) do
+        debug =true if ARGV[0].eql?("-d") or ARGV[0].eql?("--debug")
+        ARGV.shift
+    end
+    
+    # Get optional server
+    if ! ARGV[0].nil?
+        @queue_server = ARGV.shift
+    end
+
+    #----------------------------------------------
+    # Setup logger
+    begin
+        log_file = $0.sub(/receiver$/, "../log/receiver.log")
+        if debug
+            log = Logger.new(STDOUT)
+            log.level = Logger::DEBUG        
+        else
+            log = Logger.new(log_file)
+            log.level = Logger::INFO
+        end
+    rescue Exception => e
+        puts "ERROR: Unable to open log file <#{log_file}>"
+        puts e
+    end
+
+    log.info("-------------- receiver - (#{@queue_server}) --------------------------")
+
+    $conn = Stomp::Connection.open '', '', @queue_server, @queue_port, false
+    $conn.subscribe("/queue/#{@queue_name}", {:ack => :auto })
+    log.debug("Connected and subscribed to queue.")
+    while true
+        begin timeout(3) do
+            @msg = $conn.receive
+        end
+        rescue Timeout::Error  # Exception => e
+            log.info "Timeout - no more messages received, disconnecting !"
+            $conn.disconnect
+            exit
+        end
+        @command = @msg.body
+        log.info("messages received: #{@msg.headers['message-id']}")
+        if @command.match(/^.*rrdtool (create|update).*|^*.update_client.sh.*/) and @command.match(/[a-zA-Z0-9\-_\/\.]*/)
+            # do it
+            log.info "Executing : #{@command}"
+        	@out = %x[#{@command}]
+        	log.info "Output: #{@out}"
+        else
+            log.error "illegal command : #{@command}"
+        end
+    end
+
+end # module
+

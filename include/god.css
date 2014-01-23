@@ -1,0 +1,140 @@
+/* Style-Sheets for Eye of God */
+
+.col                { float:left; overflow:visible; display:block; } /* margin-right:20px; } */
+.col.last           { margin-right:0px; }
+.col.c5             { width:5%; }
+.col.c10            { width:10%; }
+.col.c25            { width:25%; }
+.col.c30            { width:30%; }
+.col.c33            { width:33%; }
+.col.c40            { width:40%; }
+.col.c45            { width:44%; }
+.col.c50            { width:49%; }
+.col.c60            { width:60%; }
+.col.c66            { width:66%; }
+.col.c70            { width:70%; }
+.col.c75            { width:75%; }
+.col.c100           { width:100%; }                                              
+
+.col.left           { float:left; }
+.col.right          { float:right; text-align:left; }
+
+.container          { width:100%; overflow:hidden; float:left; margin-bottom:30px; }
+.container.shallow  { margin-bottom:0; }
+.container.scroll   { overflow: scroll; }
+.container.margin   { margin: 5px; padding: 5px;};
+.container.padding  { padding: 25px; };
+
+.left               { float:left; }
+.right              { float:right; }
+.tright             { text-align:right; }
+.tcenter            { text-align:center; }
+
+.nobr               { white-space: nowrap; width: 100%; overflow: hidden; }
+
+/* lets overwrite some icon size from theme ui */
+.small {
+    width:  1.5em;
+    height: 1.5em;
+}
+
+a {
+    text-decoration: none;
+}
+
+body { 
+    font-size: 80%;
+    font-family: "Trebuchet MS", "Helvetica", "Arial",  "Verdana", "sans-serif";
+}
+
+table {
+    font-size: 1em;
+}
+
+ul.navigation {
+    border: 0;
+    background: none;
+}
+
+/*form.tree {
+    padding: 5px;
+}
+*/
+/* p   { margin-left: 5px} */
+
+img { border: 0; }
+
+div#help {
+    display: none;
+    height: 400px;
+    padding: 5px;
+    top: 5px;
+    margin-bottom: 5px;
+}
+
+div#config { 
+    display: none;
+    padding: 15px;
+    position: fixed;
+    top: 60px;
+    right: 100px;
+    width: 350px;
+}
+
+div#favorites {
+    display: none;
+    padding: 15px;
+    position: fixed;
+    top: 60px;
+    right: 100px;
+    width: 300px;
+}
+
+div#left {
+    display: none;
+    padding: 15px;
+    position: fixed;
+    top: 60px;
+    left: 10px;
+    width: 550px;
+}
+
+div#right {
+    display: none;
+    padding: 15px;
+    position: fixed;
+    top: 60px;
+    right: 10px;
+    width: 550px;
+}
+
+div#time {
+    position: fixed;
+    padding: 5px; 
+    height: 35px;
+    z-index: 10;
+}
+
+div#spacer {
+    height: 55px;
+    width: 100%;
+}
+
+div#graph {
+    padding: 5px;
+    z-index: 1;
+}
+
+div.selector-div {
+    margin: 5px 10px;
+    overflow: scroll;
+    overflow-x: hidden;
+    white-space: nowrap;
+}
+
+div.tree-div {
+    margin: 5px 10px;
+    overflow: scroll;
+    overflow-x: hidden;
+    white-space: nowrap;
+}

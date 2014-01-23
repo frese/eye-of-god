@@ -1,0 +1,235 @@
+#!/usr/local/bin/ruby18
+#----------------------------------------------------------------------------
+# eye-of-god: collect 
+# Update one RRD database at "odd" intervals or other times ....
+#
+# This script is typically called from cron at "strange" times, that somehow does
+# not fit into the normal "collector". Alternatively call this from other scripts
+# when data is available ....
+# You could also use this to simulate a fake "server" that does not exists at 
+# all, or to collect data from network equipment that can't host the regular collector.
+#
+# Usage: collect [-d] [--server <server>] --service <service> 
+#                      --script <script>|--data <data>|--stdin
+#
+# Description:
+# Read config/god.yaml (main configuration) and the services specific conf.
+# Updates RRD data by running a specified script
+#
+# (c) Atchik-Realtime A/S, Sep 2009
+#----------------------------------------------------------------------------
+$:.unshift("/home/air/lib/ruby")
+
+require "rubygems"
+require "yaml"
+require "pp"
+require "logger"
+require "optparse"
+require "json"
+
+# time now in rrdtool update format - seconds since 1970-01-01
+$hostname = %x[hostname].chomp
+
+# configuration files
+YAML_GOD      = File.dirname(__FILE__) + "/../config/god.yaml"
+YAML_HOSTNAME = File.dirname(__FILE__) + "/../config/#{$hostname}.yaml"
+YAML_SERVICES = File.dirname(__FILE__) + "/../config/services.yaml"
+
+#--------------------------------------------
+# default options
+$debug      = false
+$server     = $hostname
+$services   = []
+$roles      = []
+$properties = []
+$data       = nil
+$date       = "N"
+$stdin      = false
+$logfile    = "collect.log"
+
+
+#-----------------------------------------------
+# Check and get arguments
+opts = OptionParser.new do |opts|
+
+    opts.banner = "Usage <flags> <options> [additional script args.]"
+    opts.separator ""
+
+    opts.on("-d", "--debug", "Enable debug and send to stdout.") do
+        $debug = true
+    end
+    opts.on("-l", "--log", "Set log-file, default is 'collect.log'") do |logfile|
+        $logfile = logfile
+    end
+    opts.on("-h", "--server SERVER", "Specify server name (defaults to 'hostname')") do |server|
+        $server = server
+    end
+    opts.on("-r", "--role ROLE", "Specify server roles (comma separated)") do |roles|
+        $roles = roles.split(/,/)
+    end
+    opts.on("-s", "--services SERVICES", "Specify which services (comma separated)") do |services|
+        $services = services.split(/,/)
+    end
+    opts.on("--data DATA", "The data to put into RRD") do |data|
+        $data = data
+    end
+    opts.on("--date DATE", "The date of the data-set (default is now)") do |date|
+        $date = date
+    end
+    opts.on("--stdin", "Read data from stdin.") do
+        $stdin = true
+    end
+    opts.on("-?", "Show this message.") do
+	puts opts
+	exit
+    end
+end
+
+# Now let the option parse run and do it's stuff
+begin
+    opts.parse!(ARGV)    
+rescue Exception => e
+    #puts e 
+    exit    
+end
+
+#-------------------------------
+# Check some mandatory arguments
+if $services.nil? or $services.empty?
+    puts opts
+    exit
+end
+
+# we init a hash, to be filled with collected data, later converted to json and sent to god server.
+$msg = {}
+$msg['hostname']   = $server
+$msg['time']       = Time.now.to_i.to_s
+$msg['data']       = []
+$msg['msgs']       = []
+$msg['roles']      = $roles
+$msg['properties'] = $properties
+$msg['services']   = $services
+
+#----------------------------------------------
+# Setup logger
+begin
+    if $debug
+        log = Logger.new(STDOUT)
+        log.level = Logger::DEBUG
+    else
+        log = Logger.new($logfile)
+        log.level = Logger::WARN
+    end
+rescue Exception => e
+    puts "ERROR: Unable to open log file <#{$logfile}>"
+    puts e
+end
+
+#----------------------------------------------
+# Read the configuration file(s)
+begin
+    $god = {}
+    if File.exists?(YAML_GOD)
+        $god = YAML.load_file(YAML_GOD) 
+        log.debug("Configuration file <#{YAML_GOD}> read successfully.")
+    end
+
+    if File.exists?(YAML_HOSTNAME)
+        $god.merge!(YAML.load_file(YAML_HOSTNAME)) 
+        log.debug("Configuration file <#{YAML_HOSTNAME}> merged.")
+    end
+
+    $svc = YAML.load_file(YAML_SERVICES)
+    log.debug("Configuration file <#{YAML_SERVICES}> read successfully.")
+rescue
+    log.error("Error loading main configuration files (#{$!})")
+    $msg['msgs'].push("Error loading main configuration files (#{$!})")
+end
+
+log.debug("------------------------------------------------------------------------------------")
+log.debug("running collect for server <#{$server}> services <#{$services.join(",")}>,")
+log.debug("using data <#{$data}>") unless $data.nil?
+log.debug("reading from STDIN") unless $stdin.nil?
+
+
+# -----------------------------------------------------------
+# now lets fetch the data from commandline, stdin or script
+
+if not $data.nil?
+    $msg['data'].push("#{$services[0]}:#{$data}")
+elsif $stdin
+    output = STDIN.read
+    $msg['data'].push("#{$services[0]}:#{output}")
+else
+    $services.each do |service|
+        begin
+            # setup the command to run the script, and add the server name as first argument.
+            cmd = "#{File.dirname(__FILE__)}/../scripts/#{$svc[service]['script']} #{$server}"
+
+            # Add possible extra arguments from cron ...
+            args = ARGV.join(" ")
+            cmd += " #{args}" unless args.nil? or args.empty?
+
+            # Now run the shit ...
+            output = %x[ #{cmd} ]
+        rescue Exception => e
+            log.error("Unable to run script <#{cmd}>")
+            log.error(e)
+            $msg['msgs'].push("ERROR: Script failed : #{$!}")
+        end
+
+        $msg['data'].push( "#{service}:#{output}")
+    end
+end
+
+log.debug("output from service script: #{output}")
+
+# Collect output to a JSON 
+
+log.debug("Sending data using driver '#{$god['driver']}'")
+begin
+    case $god['driver']
+    when 'stomp'
+        require "#{File.dirname(File.expand_path(__FILE__))}/drivers/stompdriver"
+        driver = Stompdriver.new($god['stomp'], log)
+
+    when 'bunny'
+        require "#{File.dirname(File.expand_path(__FILE__))}/drivers/bunnydriver"
+        driver = BunnyDriver.new($god['bunny'], log)
+        
+    when 'sqs'
+        require "#{File.dirname(File.expand_path(__FILE__))}/drivers/sqsdriver"
+        driver = SqsDriver.new($god['sqs'], log)
+
+    when 'scp'
+        log.error("Not implemented yet !")
+        exit
+
+    when 'local'
+        log.error("Not implemented yet !")
+        exit
+
+    when 'test'
+        log.info("msg = #{JSON.generate($msg)}")
+        exit
+    else
+        log.error("Illegal driver type !")
+    end
+rescue
+    log.error("Error initializing driver (#{$!})")
+    $msg['msgs'].push("Error initializing driver (#{$!})")
+end
+
+# retyr
+n = 3
+begin
+    driver.connect
+    log.debug("Sending data to server : #{$msg.inspect}")
+    driver.publish(JSON.generate($msg))
+rescue
+    n -= 1
+    retry if n <= 0
+end
+driver.disconnect
+
+log.debug("collect finished!")

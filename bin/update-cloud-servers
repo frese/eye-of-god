@@ -1,0 +1,53 @@
+#!/usr/local/bin/ruby
+#-----------------------------------------------------------------------------------
+# eye-of-god
+# update-cloud-serves
+# 
+# (c) Atchik-Realtime A/S, June 2010
+#-----------------------------------------------------------------------------------
+
+require 'yaml'
+require 'pp'
+
+#----------------------------------------------------------
+# Read the configuration file
+hostname = %x[hostname].chomp
+$god = YAML.load_file($0.sub(/update-cloud-servers$/, "../config/god.#{hostname}.yaml")) rescue
+$god = YAML.load_file($0.sub(/update-cloud-servers$/, "../config/god.yaml"))
+
+files = `find #{$god['rrddir']} -name z_* -mtime -2`.split
+cloud = {}
+
+files.each { |f|
+   f.sub!(/#{$god['rrddir']}\//,"")
+   f.sub!(/.rrd$/,"")
+   (server, rest) = f.split("-", 2)
+   if rest.match("-")
+      (ds, service) = rest.reverse.split("-", 2)
+      service.reverse! unless service.nil?
+      ds.reverse! unless ds.nil?
+   else
+      service = rest
+      ds = ""
+   end
+   # Build the yaml structure ...
+   cloud[server] = {} unless cloud[server]
+   cloud[server]['hostname'] = "berlin.realtime.dk"
+   cloud[server]['services'] = [] unless cloud[server]['services']
+   cloud[server]['services'] << service unless cloud[server]['services'].index(service)
+   
+#   pp server, service, ds
+}
+
+puts "# Auto generated config file !! - Don't edit !!"
+puts "groups:"
+puts "    realtime-cloud: [ #{cloud.keys.join(', ')} ]"
+puts
+puts "server:"
+cloud.sort.each { |server, hash|
+    puts "    #{server}:"
+    puts "        hostname: #{cloud[server]['hostname']}"
+    puts "        services: [ #{cloud[server]['services'].sort{|x,y| x.match("response")? -1 : ( y.match("response")? 1 : x <=> y) }.join(', ')} ]"
+}
+
+

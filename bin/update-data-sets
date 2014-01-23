@@ -1,0 +1,84 @@
+#!/usr/local/bin/ruby
+#----------------------------------------------------------------------------
+# eye-of-god: update-data-sets
+# Update the "config/data-sets.yaml" file with information about
+# dynamic services from all servers.
+#
+# This script is typically called from cron every hour (or so ...)
+#
+# (c) Atchik-Realtime A/S, 2010
+#----------------------------------------------------------------------------
+
+require 'yaml'
+require 'pp'
+require 'logger'
+require 'net/http'
+
+$yaml = "# Automatic generated file - hands off !!!\n"
+
+debug=false
+if ARGV[0].eql?('-d')
+    debug=true
+    ARGV.shift
+end
+#----------------------------------------------
+# Setup logger
+begin
+    log_file = $0.sub(/update-data-sets$/, "../log/update-data-sets.log")
+    if debug
+        log = Logger.new(STDOUT)
+        log.level = Logger::DEBUG        
+    else
+        log = Logger.new(log_file, shift_age=3, shift_size=10000000)
+        log.level = Logger::WARN
+    end
+rescue Exception => e
+    puts "ERROR: Unable to open log file <#{log_file}>"
+    puts e
+end
+
+#----------------------------------------------
+# Read the configuration file
+hostname = %x[hostname] .chomp
+$god = YAML.load_file($0.sub(/update-data-sets$/, "../config/god.#{hostname}.yaml")) rescue
+$god = YAML.load_file($0.sub(/update-data-sets$/, "../config/god.yaml")) 
+
+log.debug("------------------------------------------------------------------------------------")
+log.debug("Running update-data-sets")
+
+#----------------------------------------------
+# Loop through all servers
+$god['server'].each { |server, v|
+
+    log.debug("-----------------------------------------------------------")
+    log.debug("---> Server <#{server}> at #{v['hostname']}")
+
+    begin
+        Net::HTTP.start(v['hostname']) { |http|
+           req = Net::HTTP::Get.new("/#{$god['cgipath']}/info?server=#{server}")
+           response = http.request(req)   
+           # Now lets parse it, ei. get the body part
+           $doc = response.body
+        }
+    rescue Exception => e
+        log.error("Error getting data from #{server} !")
+        log.error(e)
+        $doc = ""
+        next
+    end
+    
+    # check response was OK
+    unless $doc.match("^#{server}:.*")
+        log.error("Strange answer from #{server}")
+        log.error($doc)
+        $doc = ""
+        next
+    end
+    
+    # Add to new data-sets yaml file.
+    $yaml += $doc
+}
+
+config_file = $0.sub(/update-data-sets$/, "../config/data-sets.yaml")
+File.open(config_file, "w") { |f| f.write($yaml) }
+

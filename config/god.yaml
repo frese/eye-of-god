@@ -1,0 +1,125 @@
+#-------------------------------------------------------------------------n
+# Configuration file for "eye-of-god" - a server surveillance system
+# Allan Frese, Athik A/S, Jan. 2014
+#--------------------------------------------------------------------------
+
+
+#--------------------------------------------------------------------------
+# Some global definitions
+homeurl:  http://god.domain.com/
+eyeurl:   http://god.domain.com/eye
+eyeofgodurl: http://en.wikipedia.org/wiki/Helix_Nebula
+
+# Where to find rrdtool, use full path.-
+rrdtool: /usr/local/bin/rrdtool
+rrddir:  /home/af/var/god/rrd
+
+# we use facter to figure out roles and properties of this server
+# the properties is used to determin which services we need to monitor
+facter: 
+    roles:      [ role ]
+    properties: [ operatingsystem, services ]
+
+
+favorites:
+    - name: Overview
+      url: "?&group1=app,usher,wap,web&service1=response&consolidate1=on&xsize=1000"
+
+
+# define service groups to monitor
+# "default" group (if it exist) is always selected
+properties:
+    default:  [ sample.cpu, sample.disk ]
+
+# define which "driver" to use to publish collected data to our server.
+driver: sqs
+
+# driver configurations
+stomp:
+    url:   stomp://god:jesus@server.domain.com:61615
+    queue: /queue/god
+    stomp.pool.size:      2
+    stomp.pool.host1:     server1.domain.com
+    stomp.pool.port1:     61614
+    stomp.pool.user1:     god
+    stomp.pool.password1: jesus
+    stomp.pool.ssl1:      true
+    stomp.pool.host2:     sserver2.domain.com
+    stomp.pool.port2:     61614
+    stomp.pool.user2:     god
+    stomp.pool.password2: jesus
+    stomp.pool.ssl2:      true
+
+
+bunny:
+    queue:       god    
+    server:      server.domain.com
+    port:        5671
+    user:        god
+    password:    jesus
+    ssl:         true
+    certificate: /home/user/god/config/cert/ca.pem
+    key:         /home/user/god/config/cert/key.pem
+
+sqs:
+    queue:        eye-of-god
+    url:          'sqs.eu-west-1.amazonaws.com'
+    access-key:   ''
+    secret-key:   ''
+
+#---------------------------------------------------------
+# Some basic/default definitions of RRD database setup
+#
+# RRA's is defined like this :
+# step is 60 sec. (data every minute) 
+# 1. archive every minute for 1 week
+# 2. archive every hour for 6 month
+# 3. archive every day for 2 years
+# archives for "average" and "max" values.
+
+rrd:
+    step: 60
+    rras: 
+        - RRA:AVERAGE:0.5:1:10080
+        - RRA:AVERAGE:0.5:60:4464
+        - RRA:AVERAGE:0.5:1440:730
+        - RRA:MAX:0.5:1:10080
+        - RRA:MAX:0.5:60:4464
+        - RRA:MAX:0.5:1440:730
+    colors: [ "000033", "000099", "0000FF",
+              "003300", "003366", "0033CC", 
+              "006600", "006666", "0066CC", 
+              "009900", "009966", "0099CC", 
+              "00CC00", "00CC66", "00CCCC", 
+              "00FF00", "00FF66", "00FFCC", 
+              "330000", "330066", "3300CC", 
+              "333300", "333366", "3333CC", 
+              "336600", "336666", "3366CC", 
+              "339900", "339966", "3399CC", 
+              "33CC00", "33CC66", "33CCCC", 
+              "33FF00", "33FF66", "33FFCC", 
+              "660000", "660066", "6600CC", 
+              "663300", "663366", "6633CC", 
+              "666600", "666666", "6666CC", 
+              "669900", "669966", "6699CC", 
+              "66CC00", "66CC66", "66CCCC", 
+              "66FF00", "66FF66", "66FFCC", 
+              "990000", "990066", "9900CC", 
+              "993300", "993366", "9933CC", 
+              "996600", "996666", "9966CC", 
+              "999900", "999966", "9999CC", 
+              "99CC00", "99CC66", "99CCCC", 
+              "99FF00", "99FF66", "99FFCC", 
+              "CC0000", "CC0066", "CC00CC", 
+              "CC3300", "CC3366", "CC33CC", 
+              "CC6600", "CC6666", "CC66CC", 
+              "CC9900", "CC9966", "CC99CC", 
+              "CCCC00", "CCCC66", "CCCCCC", 
+              "CCFF00", "CCFF66", "CCFFCC", 
+              "FF0000", "FF0066", "FF00CC", 
+              "FF3300", "FF3366", "FF33CC", 
+              "FF6600", "FF6666", "FF66CC", 
+              "FF9900", "FF9966", "FF99CC", 
+              "FFCC00", "FFCC66", "FFCCCC", 
+              "FFFF00", "FFFF66", "FFFFCC" ]
+

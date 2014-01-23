@@ -1,0 +1,22 @@
+#!/bin/bash
+#---------------------------------------------------------------
+# cleanup data from old servers etc ....
+
+# Stop the daemon
+/home/air/sbin/services stop god
+#/home/air/sbin/services stop god2
+
+# Remove automatic generated configurations
+echo "Cleanup all auto-generated config files ..."
+rm /home/air/etc/god/data-sets.yaml
+rm /home/air/etc/god/properties.yaml
+rm /home/air/etc/god/roles.yaml
+
+# remove rrd databases not updated for 5 days
+echo "Cleaning RRD databases not updated for 5 days."
+cd /home/air/var/god/rrd
+find . -mtime +5 | xargs rm -f
+
+# start the daemon
+/home/air/sbin/services start god
+#/home/air/sbin/services start god2

@@ -1,0 +1,57 @@
+#!/usr/local/bin/ruby
+#-----------------------------------------------------------------------------------
+# eye-of-god
+# info: provide information about services from the client to god server
+# 
+# Arguments
+#       server:  usually the same as hostname - but could be another host
+#
+# (c) Atchik-Realtime A/S, July 2009
+#-----------------------------------------------------------------------------------
+
+require 'yaml'
+require 'erb'
+require 'cgi'
+require 'pp'
+
+#----------------------------------------------------------
+# Init and read some cgi paramters
+hostname = %x[hostname].chomp
+cgi = CGI.new
+$server  = cgi['server']    # the server 
+$server = hostname if $server.nil? or $server.empty?
+
+#----------------------------------------------------------
+# Read the configuration file
+$god = YAML.load_file($0.sub(/info$/, "../config/god.#{hostname}.yaml")) rescue
+$god = YAML.load_file($0.sub(/info$/, "../config/god.yaml"))
+
+#----------------------------------------------------------
+# Now lets write some information about dynamic services services.
+# Format is yaml which will be concatenated for all servers into
+# one yaml file for god to read.
+#
+# dynservices:
+#     hostname:
+#         service-a: [ ds1, ds2, ds3, ds4 ]
+#         service-b: [ ds1, ds2, ds3, ds4 ]
+#     
+printf "Content-Type: text/yaml\n\n"
+
+puts "#{$server}:"
+$god['server'][$server]['services'].each { |service|
+    rrdfile_dynamic = "#{$god['rrddir']}/#{$server}-#{service}-*.rrd"
+
+    $svc = YAML.load_file($0.sub(/cgi\/info$/, "config/#{service}.yaml"))
+    if $svc['script_type'].match('dynamic')
+        # Get the "ds" (data-sets)
+        ds = []
+        `ls -1 #{rrdfile_dynamic}`.each_line { |file|
+        	file.chomp!
+        	ds.push(file.match(/.*-([^-]*).rrd$/)[1])
+        }
+        puts "  #{service}: [ #{ds.join(", ")} ]"
+    end
+}
+#
+# 

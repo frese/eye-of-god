@@ -1,0 +1,403 @@
+#!/usr/local/bin/ruby18
+#--------------------------------------------------------------------------------------------
+# Eye-of-God - server script for presenting graphs from various servers
+#
+# (c) Allan Frese, Atchik-Realtime A/S, jan-2009
+#--------------------------------------------------------------------------------------------
+
+require 'yaml'
+require 'erb'
+require 'cgi'
+require 'pp'
+# require 'active_support'
+# require 'logger'
+
+begin
+
+#----------------------------------------------------------
+# Read the configuration file
+$hostname = %x[hostname -s].chomp
+
+# Configurations files
+YAML_GOD        = File.dirname(__FILE__) + "/../config/god.yaml"
+YAML_HOSTNAME   = File.dirname(__FILE__) + "/../config/#{$hostname}.yaml"
+YAML_SERVICES   = File.dirname(__FILE__) + "/../config/services.yaml"
+YAML_ROLES      = File.dirname(__FILE__) + "/../config/roles.yaml"
+YAML_PROPERTIES = File.dirname(__FILE__) + "/../config/properties.yaml"
+YAML_DATASETS   = File.dirname(__FILE__) + "/../config/data-sets.yaml"
+
+$timeselects = [  
+     [ " 1 hours", 1    ],
+     [ " 2 hours", 2    ],
+     [ " 4 hours", 4    ],
+     [ " 6 hours", 6    ],
+     [ "12 hours", 12   ],
+     [ "24 hours", 24   ],
+     [ "36 hours", 36   ],
+     [ " 2 days" , 48   ],
+     [ " 4 days" , 96   ],
+     [ " 7 days" , 168  ],
+     [ "14 days" , 336  ],
+     [ "30 days" , 720  ],
+     [ " 3 month", 2184 ],
+     [ " 6 month", 4368 ],
+     [ " 1 year" , 8760 ] ]
+     
+#----------------------------------------------
+# Read the configuration file(s)
+$god = YAML.load_file(YAML_GOD)
+$god.merge!(YAML.load_file(YAML_HOSTNAME)) if File.exist?(YAML_HOSTNAME)
+#$svc = YAML.load_file(YAML_SERVICES)
+
+#-------------------------------------------------------
+# Read to auto generated "roles" and "properties" yaml files.
+$roles      = YAML.load_file(YAML_ROLES)      rescue $roles = []
+$properties = YAML.load_file(YAML_PROPERTIES) rescue $groups = []
+$dss        = YAML.load_file(YAML_DATASETS)   rescue $ds = []
+$services   = YAML.load_file(YAML_SERVICES)
+
+# Remove services not used
+services_used = []
+$dss.each { |host| services_used.concat(host[1].keys) } if $dss
+$services.delete_if { |key,value| !services_used.include?(key) }
+
+#----------------------------------------------------------
+# Init and read some cgi paramters
+$cgi = CGI.new
+
+$group1       = $cgi.params['group1'].compact.sort.uniq.map { |i| i.split(/,/) }.flatten
+$group2       = $cgi.params['group2'].compact.sort.uniq.map { |i| i.split(/,/) }.flatten
+$servers1     = $cgi.params['servers1'].compact.sort.uniq.map { |i| i.split(/,/) }.flatten
+$servers2     = $cgi.params['servers2'].compact.sort.uniq.map { |i| i.split(/,/) }.flatten
+$properties1  = $cgi.params['properties1'].compact.sort.uniq.map { |i| i.split(/,/) }.flatten
+$properties2  = $cgi.params['properties2'].compact.sort.uniq.map { |i| i.split(/,/) }.flatten
+$consolidate1 = $cgi['consolidate1']
+$consolidate2 = $cgi['consolidate2']
+$service1     = $cgi['service1']
+$service2     = $cgi['service2']
+$ds1          = $cgi['ds1']
+$ds2          = $cgi['ds2']
+$time         = $cgi['time']
+$tdiff        = $cgi['tdiff']
+$xsize        = $cgi['xsize']
+$showds       = $cgi['showds']
+
+$group1.delete_if { |i| i.empty? }
+$group2.delete_if { |i| i.empty? }
+$servers1.delete_if { |i| i.empty? }
+$servers2.delete_if { |i| i.empty? }
+$properties1.delete_if { |i| i.empty? }
+$properties2.delete_if { |i| i.empty? }
+
+$graphs1  = []
+$graphs2  = []
+
+# Set server lists if only properties is selected
+if ! $properties1.empty?
+    if $group1.empty? and $servers1.empty?
+        $properties1.each { |i| $servers1 += $properties[i] }
+        $servers1.sort!.uniq!
+    else
+        $servers1.delete_if { |server| exist=true; $properties1.each { |prop| exist |= !$properties[prop].include?(server) }; exist }
+    end
+end
+
+if ! $properties2.empty?
+    if $group2.empty? and $servers2.empty?
+        $properties2.each { |i| $servers2 += $properties[i] }
+        $servers2.sort!.uniq!
+    else
+        $servers2.delete_if { |server| exist=true; $properties2.each { |prop| exist |= !$properties[prop].include?(server) }; exist }
+    end
+end
+
+$debug = $cgi.cookies["god.debug"].value[0] if ! $cgi.cookies["god.debug"].empty?
+
+#------------------------------------------------------------
+# set some default values unless defined already ....
+$group1   = [$roles.keys.sort[0]] if $group1.empty? and $properties1.empty? and $servers1.empty?
+$time     = "12" if $time.empty?
+
+if $service1.empty?
+    if ! $servers1.empty?
+        server = $servers1[0]
+    elsif ! $properties1.empty?
+        server = $properties[ $properties1[0] ][0]
+    else
+        server = $roles[ $group1[0] ][0]
+    end
+    if !$dss[server].nil? and $dss[server].include?("response")
+        $service1 = "response"
+    elsif !$dss[server].nil? and $dss[server].include?("cpu")
+        $service1 = "cpu"
+    else
+        $service1 = $dss[server].keys[0]
+    end
+end
+
+begin
+if $service2.empty?
+    if ! $servers2.empty?
+        server = $servers2[0]
+    elsif ! $properties2.empty?
+        server = $properties[ $properties2[0] ][0]
+    else
+        server = $roles[ $group2[0] ][0]
+    end
+    if !$dss[server].nil? and $dss[server].include?("response")
+        $service2 = "response"
+    elsif !$dss[server].nil? and $dss[server].include?("cpu")
+        $service2 = "cpu"
+    else
+        $service2 = $dss[server].keys[0]
+    end
+end
+rescue # silently ignore errors from setup of second column
+end
+
+#----------------------------------------------------
+# default size of "graph" area.
+$xsize = 800 if $xsize.empty?
+# size of images a bit smaller than "graph" area to make room for scrollbars
+# (this have been adjusted a couple of times - test all browsers if changed !)
+$size = $xsize.to_i - 10
+# Half the size of images - if a second service is selected
+$size = ($size.to_i/2)-5 unless $group2.empty? and $servers2.empty?
+
+#----------------------------------------------------------------------------
+# Setup some url-parts for use various places.
+# $url_servers1 = "&amp;group1=#{$group1.join(',')}&amp;servers1=#{$servers1.join(',')}&amp;service1=#{$service1}&amp;consolidate1=#{$consolidate1}"
+# $url_servers2 = "&amp;group2=#{$group2.join(',')}&amp;servers2=#{$servers2.join(',')}&amp;service2=#{$service2}&amp;consolidate2=#{$consolidate2}"
+$url_servers1 = ""
+$url_servers1 += "&amp;group1=#{$group1.join(',')}" unless $group1.empty?
+$url_servers1 += "&amp;servers1=#{$servers1.join(',')}" if $group1.empty? and not $servers1.empty?
+$url_servers1 += "&amp;service1=#{$service1}" unless $service1.empty?
+$url_servers1 += "&amp;consolidate1=#{$consolidate1}" unless $consolidate1.empty?
+
+$url_servers2 = ""
+$url_servers2 += "&amp;group2=#{$group2.join(',')}" unless $group2.empty?
+$url_servers2 += "&amp;servers2=#{$servers2.join(',')}" if $group2.empty? and not $servers2.empty?
+$url_servers2 += "&amp;service2=#{$service2}" unless $service2.empty?
+$url_servers2 += "&amp;consolidate2=#{$consolidate2}" unless $consolidate2.empty?
+
+$url_servers  = "#{$url_servers1}#{$url_servers2}"
+$url_time     = "&amp;time=#{$time}&amp;tdiff=#{$tdiff}"
+$url_time     = "&amp;time=#{$god['default']['time']}&amp;tdiff=0" if $time.to_i == 0
+$url_service  = "&amp;service1=#{$service1}&amp;service2=#{$service2}"
+$url_size     = "&amp;xsize=#{$xsize}"
+$img_size     = "&amp;size=#{$size}"
+$url_colors   = "&amp;bcolor=666&amp;fcolor=DDD&amp;scolor=222&amp;ccolor=EEE"
+#$url_colors   = "&amp;bcolor=444&amp;fcolor=F63&amp;scolor=222&amp;ccolor=EEE"
+
+#-------------------------------------------------------------
+# set some url's for the time-shift buttons
+$back_href    = "#{$god['homeurl']}?#{$url_servers}#{$url_service}&amp;" + 
+                "time=#{$time}&amp;tdiff=#{$tdiff.to_i+$time.to_i}#{$url_size}&amp;showds=#{$showds}"
+$back24_href  = "#{$god['homeurl']}?#{$url_servers}#{$url_service}&amp;" + 
+                "time=#{$time}&amp;tdiff=#{$tdiff.to_i+24}#{$url_size}&amp;showds=#{$showds}"
+t = $tdiff.to_i - $time.to_i
+t = 0 if t < 0
+$forward_href = "#{$god['homeurl']}?#{$url_servers}#{$url_service}&amp;time=#{$time}&amp;tdiff=#{t}#{$url_size}&amp;showds=#{$showds}"
+$now_href     = "#{$god['homeurl']}?#{$url_servers}#{$url_service}&amp;time=#{$time}&amp;tdiff=0#{$url_size}&amp;showds=#{$showds}"
+
+$href_time = ""
+$href_time = "&amp;start=end-#{$tdiff}hour&amp;end=now-#{$tdiff}hour" if $tdiff.to_i != 0
+
+#----------------------------------------------------------------------------
+# Prepare a list of url's for the graphs
+# if a particular server is selected, show all services for that server
+# else show the "first" service for all servers in the selected group
+
+if $consolidate1.eql?("on")
+    if $group1.empty? and ! $properties1.empty?
+        $properties1.each do |p| 
+            $services[$service1].keys.select{ |i| i=~ /graph/ }.each do |graph|
+                url  = "#{$god['eyeurl']}?" +
+                       "server=#{$properties[p].sort.join(",")}&amp;group=#{p}&amp;service=#{$service1}&amp;ds=#{$ds1}&amp;graph=#{graph}&amp;time=#{$time}&amp;tdiff=#{$tdiff}#{$img_size}"
+                href = "#{$god['homeurl']}?servers1=#{$properties[p].sort.join(",")}&amp;service1=#{$service1}#{$url_time}#{$url_size}#{$url_servers2}"
+                $graphs1 << [url, href]
+            end
+        end
+    else
+        $group1.each do |grp| 
+            $services[$service1].keys.select{ |i| i=~ /graph/ }.each do |graph|
+                url  = "#{$god['eyeurl']}?" +
+                       "server=#{$roles[grp].sort.join(",")}&amp;group=#{grp}&amp;service=#{$service1}&amp;ds=#{$ds1}&amp;graph=#{graph}&amp;time=#{$time}&amp;tdiff=#{$tdiff}#{$img_size}"
+                href = "#{$god['homeurl']}?servers1=#{$roles[grp].sort.join(",")}&amp;service1=#{$service1}#{$url_time}#{$url_size}#{$url_servers2}"
+                $graphs1 << [url, href]
+            end
+        end
+    end
+
+elsif $servers1.empty?
+    # No servers selected, use all servers in selected group
+    $roles[$group1[0]].sort.each do |server|
+        $services[$service1].keys.select{ |i| i=~ /graph/ }.each do |graph|
+        	url  = "#{$god['eyeurl']}?" +
+        	       "server=#{server}&amp;service=#{$service1}&amp;ds=#{$ds1}&amp;graph=#{graph}&amp;time=#{$time}&amp;tdiff=#{$tdiff}#{$img_size}"
+        	href = "#{$god['homeurl']}?servers1=#{server}#{$url_time}#{$url_size}#{$url_servers2}"
+        	$graphs1 << [url, href]
+        end
+    end
+else
+    # A list of servers are selected !
+    if $servers1.length > 1
+    	$servers1.each do |server|
+            $services[$service1].keys.select{ |i| i=~ /graph/ }.each do |graph|
+        	    url  = "#{$god['eyeurl']}?" +
+        	           "server=#{server}&amp;service=#{$service1}&amp;ds=#{$ds1}&amp;graph=#{graph}&amp;time=#{$time}&amp;tdiff=#{$tdiff}#{$img_size}"
+        	    href = "#{$god['homeurl']}?servers1=#{server}#{$url_time}#{$url_size}#{$url_servers2}"
+                $graphs1 << [url, href]
+        	end
+        end
+    else
+        # Only one server is selected, show all services for this server or 
+        # if service1 is a dynamic service, show all data-sets
+    	server = $servers1[0]
+	    if !$dss[server].empty? and !($dss[server][$service1].nil? or $dss[server][$service1].empty?) and ! $showds.empty?
+	        $dss[server][$service1].sort.each do |ds|
+                $services[$service1].keys.select{ |i| i=~ /graph/ }.each do |graph|
+            		url  = "#{$god['eyeurl']}?" + 
+            		       "server=#{server}&amp;service=#{$service1}&amp;ds=#{ds}&amp;graph=#{graph}&amp;time=#{$time}&amp;tdiff=#{$tdiff}#{$img_size}"
+            		href = ""
+            		$graphs1 << [url, href]
+                end
+
+            end
+        else
+    	    $dss[server].keys.sort.each do |service|
+                $services[service].keys.select{ |i| i=~ /graph/ }.each do |graph|
+            		url = "#{$god['eyeurl']}?" + 
+            		      "server=#{server}&amp;service=#{service}&amp;ds=#{$ds1}&amp;graph=#{graph}&amp;time=#{$time}&amp;tdiff=#{$tdiff}#{$img_size}"
+    		        if ! $dss[server].nil? and $dss[server][service] and ! $dss[server][service].empty?
+            		    href = "#{$god['homeurl']}?servers1=#{server}&amp;" + 
+                		       "service1=#{service}&amp;ds=#{$ds1}&amp;time=#{$time}&amp;tdiff=#{$tdiff}#{$url_size}#{$url_servers2}&amp;showds=1"
+    	            else
+            		    href = ""
+    		        end
+            		$graphs1 << [url, href]
+                end
+    	    end
+        end
+    end
+end
+
+# ========= AND NOW FOR SERVER2 ================
+
+if $consolidate2.eql?("on")
+    if $group2.empty? and ! $properties2.empty?
+        $properties2.each do |p| 
+            $services[$service2].keys.select{ |i| i=~ /graph/ }.each do |graph|
+                url  = "#{$god['eyeurl']}?" +
+                       "server=#{$properties[p].sort.join(",")}&amp;group=#{p}&amp;service=#{$service2}&amp;ds=#{$ds2}&amp;graph=#{graph}&amp;time=#{$time}&amp;tdiff=#{$tdiff}#{$img_size}"
+                href = "#{$god['homeurl']}?servers2=#{$properties[p].sort.join(",")}&amp;service1=#{$service2}#{$url_time}#{$url_size}#{$url_servers1}"
+                $graphs2 << [url, href]
+            end
+        end
+    else
+        $group2.each do |grp| 
+            $services[$service2].keys.select{ |i| i=~ /graph/ }.each do |graph|
+                url  = "#{$god['eyeurl']}?" +
+                       "server=#{$roles[grp].sort.join(",")}&amp;group=#{grp}&amp;service=#{$service2}&amp;ds=#{$ds2}&amp;graph=#{graph}&amp;time=#{$time}&amp;tdiff=#{$tdiff}#{$img_size}"
+                href = "#{$god['homeurl']}?servers2=#{$roles[grp].sort.join(",")}&amp;service2=#{$service2}#{$url_time}#{$url_size}#{$url_servers1}"
+                $graphs2 << [url, href]
+            end
+        end
+    end
+
+elsif $servers2.empty?
+    # No servers selected, use all servers in selected group (or default group)
+    # $god['groups'][$group1].each do |server|
+    unless $group2.empty?
+        $roles[$group2[0]].sort.each do |server|
+            $services[$service2].keys.select{ |i| i=~ /graph/ }.each do |graph|
+                url  = "#{$god['eyeurl']}?" +
+                       "server=#{server}&amp;service=#{$service2}&amp;ds=#{$ds2}&amp;graph=#{graph}&amp;time=#{$time}&amp;tdiff=#{$tdiff}#{$img_size}"
+                href = "#{$god['homeurl']}?servers2=#{server}#{$url_time}#{$url_size}#{$url_servers1}"
+                $graphs2 << [url, href]
+            end
+        end
+    end
+else
+    # A list of servers are selected !
+    if $servers2.length > 1
+        $servers2.each do |server|
+            $services[$service2].keys.select{ |i| i=~ /graph/ }.each do |graph|
+                url  = "#{$god['eyeurl']}?" +
+                       "server=#{server}&amp;service=#{$service2}&amp;ds=#{$ds2}&amp;graph=#{graph}&amp;time=#{$time}&amp;tdiff=#{$tdiff}#{$img_size}"
+                href = "#{$god['homeurl']}?servers2=#{server}#{$url_time}#{$url_size}#{$url_servers1}"
+                $graphs2 << [url, href]
+            end
+        end
+    else
+        # Only one server is selected, show all services for this server or 
+        # if service1 is a dynamic service, show all data-sets
+        server = $servers2[0]
+        if !$dss[server].empty? and !($dss[server][$service2].nil? or $dss[server][$service2].empty?)
+            $dss[server][$service2].sort.each do |ds|
+                $services[$service2].keys.select{ |i| i=~ /graph/ }.each do |graph|
+                    url  = "#{$god['eyeurl']}?" + 
+                           "server=#{server}&amp;service=#{$service2}&amp;ds=#{ds}&amp;graph=#{graph}&amp;time=#{$time}&amp;tdiff=#{$tdiff}#{$img_size}"
+                    href = ""
+                    $graphs2 << [url, href]
+                end
+            end
+        else
+            $dss[server].keys.sort.each do |service|
+                $services[service].keys.select{ |i| i=~ /graph/ }.each do |graph|
+                    url  = "#{$god['eyeurl']}?" + 
+                           "server=#{server}&amp;service=#{service}&amp;ds=#{$ds2}&amp;graph=#{graph}&amp;time=#{$time}&amp;tdiff=#{$tdiff}#{$img_size}"
+                    if ! $dss[server].nil? and $dss[server][service] and ! $dss[server][service].empty?
+                        href = "#{$god['homeurl']}?servers2=#{server}&amp;" + 
+                               "service2=#{service}&amp;ds=#{$ds2}&amp;time=#{$time}&amp;tdiff=#{$tdiff}#{$url_size}#{$url_servers1}"
+                    else
+                        href = ""
+                    end
+                    $graphs2 << [url, href]
+                end
+            end
+        end
+    end
+end
+
+# fix if graph2 is bigger than graph1 array
+# (insert a number of empty objects)
+while not $graphs2.nil? and ($graphs2.length > $graphs1.length) do
+    $graphs1 << [ "", "" ]
+end
+
+$hostname = %x[hostname].chomp
+
+#-----------------------------------------------------------------
+# render the html page from god.rhtml erb template
+erb = ERB.new(File.read(File.dirname(__FILE__) + "/../include/god.rhtml"))
+$cgi.header("status" => "200 OK")
+$cgi.out("type" => "text/html") { 
+    erb.result
+}
+ 
+rescue
+    puts "Content-type: text/plain"
+    puts
+    puts "Error : (#{$!})"
+    puts $!.backtrace
+    puts "------------------------------------------------"
+    pp $cgi
+    puts "------------------------------------------------"
+    pp "$group1       = #{$group1}"
+    pp "$group2       = #{$group2}"
+    pp "$servers1     = #{$servers1}"
+    pp "$servers2     = #{$servers2}"
+    pp "$properties1  = #{$properties1}"
+    pp "$properties2  = #{$properties2}"
+    pp "$service1     = #{$service1}"
+    pp "$service2     = #{$service2}"
+    pp "$consolidate1 = #{$consolidate1}"
+    pp "$consolidate2 = #{$consolidate2}"
+    pp "$ds1          = #{$ds1}"
+    pp "$ds2          = #{$ds2}"
+    pp "showds        = #{$showds}"
+#$dss.each {|host| puts "-------------"; pp host[1].keys}
+pp services_used
+end
+

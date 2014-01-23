@@ -1,0 +1,201 @@
+#=========================================================================================
+# service configuration
+#
+# For each service, the following features neeed to be defined
+#
+# script: the script to run to collect data samples
+#
+# script_type: "static" or "dynamic"
+#              static:  returns all values (defined exactly in "ds" section) on one line 
+#                       separated by "separator"
+#              dynamic: returns a "dynamic" number of lines with "label-value" pairs 
+#                       separated by "separator" - in "ds" section the first line is 
+#                       repeated for every label-value pair, replacing "{DS}" with label.
+#
+# script_parm: optional script parameters
+#
+# separator: seperator used to divide several values, usually "," or the like
+#
+# step: How many steps between runs.
+#       the "collector" script is supposed to run each minute from cron.
+#       if step=5, this service would be collected every 5 minutes.
+#
+# hlabel: horizontal label in graphs
+# vlabel: vertical label in graphs
+#
+# ds: List of data-sets, use "{DS}" for dynamically assigned data-set names from your script.
+#
+# graph: Define how you want your data drawn in graphs-
+#        Again, use "{DS}" for dynamical assigned names and "{COLOR}" for a "dynamic" color.
+#        Always use "{RRD}" for the RRD database file location.
+#
+# For aditional graphs, you can add a section called "graph2", "graphB" or similar. You also 
+# have to provide similar "hlabel" and "vlabel" parameters, ie. "hlabel2" and "vlabel2"
+#
+# flags: Extra flags/options to rrdtool when generating graphs.
+#        Common flags are:
+#        -A    : Alternative autoscale
+#        -J    : Alternative autoscale minimum
+#        -M    : Alternative autoscale maximum
+#        -u nn : Upper limit
+#        -l nn : Lower limit
+#        See rrdtool documentation for other options. Remember that eye-of-god controls the
+#        time and size options. Don't mess with those-
+
+#------------------------------------------------------------------------
+sample.netconn:    
+    # Script that runs to optain values for this service
+    # the script should print results on stdout according
+    # to script_type and separator
+    script: sample.netconn.sh
+
+    # script_type: "static" or "dynamic"
+    # static:  returns all values (defined exactly in "ds" section) on one line 
+    #          separated by "separator"
+    # dynamic: returns a "dynamic" number of lines with "label-value" pairs 
+    #          separated by "separator" - in "ds" section the first line is 
+    #          repeated for every label-value pair, replacing "{DS}" with label.
+    #
+    script_type: dynamic
+
+    # separator used
+    separator: ','
+
+    # How many steps between runs. 
+    # the "collector" script is supposed to run each minute from cron.
+    # if step=5, this service would be collected every 5 minutes.
+    step: 1
+
+    # horizontal and vertical labels
+    hlabel: "Network Usage"
+    vlabel: "Connections"
+
+    # List of data-sets, use "{DS}" for dynamically assigned data-set names from your script.
+    ds:
+        - DS:{DS}:GAUGE:120:0:U
+
+    # Define how you want your data drawn in graphs-
+    # Again, use "{DS}" for dynamical assigned names and "{COLOR}" for a "dynamic" color.
+    # Always use "{RRD}" for the RRD database file location.
+    graph:
+        - DEF:{DS}={RRD}:{DS}:MAX
+        - LINE1.5:{DS}#{COLOR}:'{DS}'
+    
+
+    # Extra flags/options to rrdtool when generating graphs.
+    # Common flags are:
+    # -A    : Alternative autoscale
+    # -J    : Alternative autoscale minimum
+    # -M    : Alternative autoscale maximum
+    # -u nn : Upper limit
+    # -l nn : Lower limit
+    # See rrdtool documentation for other options. Remember that eye-of-god controls the
+    # time and size options. Don't mess with those-
+    flags: "-A"
+
+#------------------------------------------------------------------------
+sample.temp:    
+    script: sample.temp.sh
+    script_type: static
+    separator: ','
+    step: 1
+
+    # horizontal and vertical labels
+    hlabel: "Temperatures"
+    vlabel: "Degrees Celcius"
+
+    # List of data-sets
+    ds:
+        - DS:disk:GAUGE:120:0:U
+        - DS:cpu_diode:GAUGE:120:0:U
+        - DS:enclosure:GAUGE:120:0:U
+        - DS:gpu_sink:GAUGE:120:0:U
+        - DS:gpu_diode:GAUGE:120:0:U
+        - DS:main_sink_1:GAUGE:120:0:U
+        - DS:main_sink_2:GAUGE:120:0:U
+        - DS:main_sink_3:GAUGE:120:0:U
+        - DS:memory:GAUGE:120:0:U
+        - DS:wlan:GAUGE:120:0:U
+
+    graph:
+        - DEF:Disk={RRD}:disk:AVERAGE
+        - DEF:CPU={RRD}:cpu_diode:AVERAGE
+        - DEF:Enclosure={RRD}:enclosure:AVERAGE
+        - DEF:GPU={RRD}:gpu_diode:AVERAGE
+        - DEF:WLAN={RRD}:wlan:AVERAGE
+        - LINE1.5:CPU#{COLOR}:'CPU'
+        - LINE1.5:Disk#{COLOR}:'Disk'
+        - LINE1.5:Enclosure#{COLOR}:'Enclosure'
+        - LINE1.5:GPU#{COLOR}:'GPU'
+        - LINE1.5:WLAN#{COLOR}:'Wlan'
+    
+    flags: "-l 0"
+
+#------------------------------------------------------------------------
+apache:    
+    script: apache.pl
+    script_type: static
+
+    separator: ' '
+    step: 1
+    hlabel: "Apache processes"
+    vlabel: "Processes/min"
+    ds:
+        - DS:TOTAL:GAUGE:120:0:U
+        - DS:BUSY:GAUGE:120:0:U
+        - DS:REQPRSEC:GAUGE:120:0:U
+    graph:
+        - DEF:PTOTAL={RRD}:TOTAL:AVERAGE
+        - DEF:PBUSY={RRD}:BUSY:AVERAGE
+        - DEF:PREQ={RRD}:REQPRSEC:AVERAGE
+        - AREA:PTOTAL#3380CC:'Total Proc'
+        - 'GPRINT:PTOTAL:AVERAGE:%.0lf'
+        - AREA:PBUSY#f68909:'Busy Proc'
+        - 'GPRINT:PBUSY:AVERAGE:%.0lf'
+        - LINE1.5:PREQ#003333:'Avg Reqeusts per sec'
+        - 'GPRINT:PREQ:AVERAGE:%.0lf'
+
+#------------------------------------------------------------------------
+cpu:
+    script: capacity
+    script_type: static
+    step: 5
+    separator: ","
+    hlabel: "Capacity"
+    vlabel: "hits/min"
+    ds:
+        - DS:hits:GAUGE:120:0:U
+        - DS:max:GAUGE:120:0:U
+        - DS:utilization:GAUGE:120:0:U
+
+    graph:
+        - DEF:hits={RRD}:hits:AVERAGE
+        - DEF:max={RRD}:max:MAX
+        - DEF:utilization={RRD}:utilization:MAX
+        - VDEF:avg=max,AVERAGE
+        - LINE1:max#BB2233:'max hits/min'
+        - AREA:hits#555599:'actual hits/min'
+        - LINE2:avg#22BB22:'average capacity'
+
+#------------------------------------------------------------------------
+sample.disk:    
+    script: disk.sh
+    script_type: dynamic
+    separator: ","
+    step: 5
+    hlabel: "Disk Usage"
+    vlabel: "Used space %"
+
+    # Define our data-sets, used in collector
+    ds:
+        - DS:{DS}_used:GAUGE:600:0:U
+
+    # Define how to show our data, used in eye
+    graph:
+        - DEF:{DS}_used={RRD}:{DS}_used:AVERAGE
+        - LINE2.5:{DS}_used#{COLOR}:'{DS}'
+        - LINE3:100#FF0000
+    
+
+#------------------------------------------------------------------------
+

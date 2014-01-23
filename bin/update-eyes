@@ -1,0 +1,64 @@
+#!/usr/local/bin/ruby
+# ---------------------------------------------------------------
+# Update all eyes
+#
+# Copy scripts, configuration, programs, includes, etc to all 
+# "eye" servers - according to god.yaml
+#
+# "update-eyes" uses secure-shell (scp or rsync via ssh) and requires
+# a ssh-key to be installed at all servers, unless you want to
+# answer passwords every time.
+#
+# -----------------------------------------------------------------
+
+require 'yaml'
+require 'pp'
+
+# Get home of "god" and make sure we are there ....
+godhome  = $0.sub(/bin\/update-eyes$/, "")
+unless godhome.empty?
+   Dir.chdir(godhome);
+end
+
+# Now get some current info ....
+hostname = %x[hostname].split(/\./)[0].chomp
+username = %x[whoami].chomp
+pwd      = %x[pwd].chomp
+home     = ENV['HOME'] + "/"
+goddir   = pwd.sub(home, "")
+
+# Setup commands to copy files between servers ... edit if needed ...  :-=
+RSYNC_CMD = "rsync -avz --exclude 'log/*' --exclude 'rrd/*' --exclude '.git/' . #{username}@<SERVER>:#{goddir}/."
+SCP_CMD   = "scp -rv bin/ cgi/ config/ images/ includes/ scripts/ #{username}@<SERVER>:#{goddir}/."
+HG_FETCH  = "ssh #{username}@<SERVER> 'cd #{goddir}/; hg fetch -u air https://proxyuser:psnext1234@hg.realtime.dk/god'"
+
+# Now read "master" configuration
+begin
+    $god = YAML.load_file("config/god.yaml")
+rescue Exception => e
+    puts "ERROR: Can't read config files ?"
+    puts e
+    exit
+end
+
+# Check where we are ? Exit if not on god server
+unless $god['god'].match("#{username}@#{hostname}")
+    puts "Only run 'update-eyes' on the defined 'god' server (see god.yaml) !!"
+    puts "Currently defined as: #{$god['god']}"
+    exit
+end
+
+eye_servers = []
+$god['server'].each { |s,v|
+    eye_servers += [v['hostname']] unless (eye_servers.include?(v['hostname']) or 
+                                           v['hostname'].match(hostname))
+}
+
+eye_servers.each { |host|
+    puts "Fetching from hg server to #{host} ...."
+    cmd = HG_FETCH.gsub(/<SERVER>/, host)
+    puts `#{cmd}`
+}
+
+
+

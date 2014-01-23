@@ -1,0 +1,273 @@
+#!/usr/local/bin/ruby18
+#----------------------------------------------------------------------------
+# eye-of-god: the collector 
+# Collects data from a server and sends to god.
+#
+# This script is typically called from cron every minute (or 5 min ?).
+#
+# Description:
+# Read config/god.yaml (main configuration) otional host specific and services
+# Find misc server "facts" (using Facter) to determin which data to collect
+# Run a series of scripts to collect data and sends all of it to "god" server.
+#
+# Usage: /..path../collector [-d|--debug] [log-file|console]
+#
+# (c) Atchik-Realtime A/S, Marts 2012
+#----------------------------------------------------------------------------
+
+# Make sure we find the right gems, both re-written (in air/lib/ruby) and god's own.
+$:.unshift("/home/air/lib/ruby")
+
+require "rubygems"
+require "yaml"
+require "pp"
+require "logger"
+require "time"
+require "timeout"
+require "facter"
+require "json"
+
+# time now in rrdtool update format - seconds since 1970-01-01
+$hostname = %x[hostname].chomp
+$hostname.sub!('.realtime.dk', '')
+$hostname.sub!('.airsector.com', '')
+$hostname.sub!('.aws.airsector.com', '')
+
+# configuration files
+YAML_GOD      = File.dirname(__FILE__) + "/../config/god.yaml"
+YAML_SERVICES = File.dirname(__FILE__) + "/../config/services.yaml"
+YAML_HOSTNAME = File.dirname(__FILE__) + "/../config/#{$hostname}.yaml"
+
+# we init a hash, to be filled with collected data, later converted to json and sent to god server.
+$msg = {}
+$msg['hostname'] = $hostname
+$msg['time']     = Time.now.to_i.to_s
+$msg['data']     = []
+$msg['msgs']     = []
+
+# Get arguments : [-d|--debug] [logfile]
+debug    = false
+log_file = "console"
+while (! ARGV[0].nil?) do
+    if ARGV[0].eql?("-d") or ARGV[0].eql?("--debug")
+        debug =true
+        ARGV.shift
+    else
+        log_file = ARGV[0]
+        ARGV.shift
+    end
+end
+
+#----------------------------------------------
+# Setup logger
+begin
+    if log_file.eql?("console") or log_file.eql?("stdout")
+        log = Logger.new(STDOUT)
+    else
+        log = Logger.new(log_file, shift_age='daily')
+    end
+    log.level = Logger::WARN   # default
+    log.level = Logger::DEBUG if debug
+rescue
+    puts "ERROR: Unable to open log file <#{log_file}> (#{$!})"
+    $msg['msgs'].push("ERROR: Unable to open logfile <#{log_file}> (#{$!})")
+end
+
+log.debug("------------------------------------------------------------------------------------")
+log.debug("Running collector for <#{$hostname}>")
+
+#----------------------------------------------
+# Read the configuration file(s)
+begin
+$god = {}
+    if File.exists?(YAML_GOD)
+        $god = YAML.load_file(YAML_GOD) 
+        log.debug("Configuration file <#{YAML_GOD}> read successfully.")
+    end
+
+    if File.exists?(YAML_HOSTNAME)
+        $god.merge!(YAML.load_file(YAML_HOSTNAME)) 
+        log.debug("Configuration file <#{YAML_HOSTNAME}> merged.")
+    end
+
+    $svc = YAML.load_file(YAML_SERVICES)
+    log.debug("Configuration file <#{YAML_SERVICES}> read successfully.")
+rescue
+    log.error("Error loading main configuration files (#{$!})")
+    $msg['msgs'].push("Error loading main configuration files (#{$!})")
+end
+
+
+#----------------------------------------------
+
+# Make sure we have facter values
+begin
+    $properties = []
+    $god['facter']['properties'].each do |f|
+        begin
+            facts = Facter[f].value
+            log.debug("Property fact found : #{f} => #{facts}")
+            facts.split(/[,;: ]/).each { |f| $properties.unshift(f)}
+        rescue
+            log.error("Fact #{f} not found (#{$!})")
+            $msg['msgs'].push("Fact #{f} not found (#{$!})")
+            next
+        end
+    end
+
+    $roles = []
+    $god['facter']['roles'].each do |f|
+        begin
+            facts = Facter[f].value 
+            log.debug("Role fact found  : #{f} => #{facts}")
+            facts.split(/[,;: ]/).each { |f| $roles.unshift(f)} unless facts.nil?
+        rescue 
+            log.error("Fact #{f} not found (#{$!})")
+            $msg['msgs'].push("Fact #{f} not found (#{$!})")
+            next
+        end
+    end
+
+    # Get the relevant services, we use services that mathces "default" property, "hostname" properties
+    # and the once found using facter
+    $services = []
+    if $god['properties'].member?("default")
+        log.debug("Properties match 'default' with services <#{$god['properties']['default'].to_s}>")
+        $god['properties']['default'].each { |service| $services.unshift(service) }
+    end
+    if $god['properties'].member?($hostname)
+        log.debug("Properties match '#{$hostname}' with services <#{$god['properties'][$hostname].to_s}>")
+        $god['properties'][$hostname].each { |service| $services.unshift(service) }
+    end
+    $properties.each do |p|
+        if $god['properties'].member?(p)
+            log.debug("Properties match '#{p}' with services <#{$god['properties'][p].to_s}>")
+            $god['properties'][p].each { |service| $services.unshift(service) }
+        end
+    end
+    $services.sort!
+    $services.uniq!
+
+    log.debug("Services to collect : #{$services.join(',')}")
+rescue
+    log.error("Error setting up configuration (#{$!})")
+    $msg['msgs'].push("Error setting up configuration (#{$!})")
+end
+
+# we init a hash, to be filled with collected data, later converted to json and sent to god server.
+$msg['roles']      = $roles
+$msg['properties'] = $properties
+$msg['services']   = $services
+
+#----------------------------------------------
+# Loop through services for this server
+begin Timeout::timeout(55) do
+    $services.each { |service|
+
+        log.debug("-----------------------------------------------------------")
+        log.debug("---> Service <#{service}>")
+
+        if $svc[service].nil?
+            log.error("Service does not exist in configuration file !")
+            $msg['msgs'].push("ERROR: Service #{service} not defined")
+            next
+        end
+        if $svc[service]['script'].empty?   # silently skip services without a script.
+        	log.debug("Script empty - skipping service.")
+            $msg['msgs'].push("ERROR: No script defined for service #{service}")
+        	next
+        end
+
+        # ----------------------------------------------------------
+        # Check if we should run this service at this time
+        unless (Time.new.min % $svc[service]['step'].to_i) == 0
+        	log.debug("Skipping service this time (step)")
+    	    next
+        end
+
+        # -----------------------------------------------------------
+        # run the required script to collect data
+        @runtime = 10   # default timeout is 10 sec.
+        @runtime = $svc[service]['timeout'] unless $svc[service]['timeout'].nil?
+        begin timeout(@runtime) do
+            # setup the command to run the script.
+            @cmd = File.dirname(__FILE__) + "/../scripts/" + $svc[service]['script']
+
+            # Add possible extra arguments from config script
+            args = $svc[service]['script_parm']
+            @cmd += " #{args}" unless args.nil? or args.empty?
+            
+            # Add possible extra arguments from cron ...
+    	    args = ARGV.join(" ")
+    	    @cmd += " #{args}" unless args.nil? or args.empty?
+
+    	    # Now run the shit ...
+    	    log.debug("Running script: #{@cmd}")
+            @output = %x[ #{@cmd} ].chomp
+        end
+        rescue Timeout::Error
+            log.error("Timeout (#{@runtime} sec.) running script <#{@cmd}>")
+            $msg['msgs'].push("ERROR: Timeout (#{'runtime'} sec.) during data collection, service #{service}")
+            next
+        rescue
+            log.error("Error running script <#{@cmd}> : #{$!}")
+            $msg['msgs'].push("ERROR: Script failed : #{$!}")
+            next
+        end
+        log.debug("output from script: #{@output}")
+
+        # Collect output to a JSON 
+        $msg['data'].push( "#{service}:#{@output}")
+
+    } 
+end
+rescue Timeout::Error
+    log.error("Timeout on data collections this minute !")
+    $msgs['msgs'].push("Timeout on data collection this minute !")
+rescue
+    log.error("Error during data collection (#{$!})")
+    $msgs['msgs'].push("Error during data collection (#{$!})")
+end
+
+log.debug("Sending data using driver '#{$god['driver']}'")
+
+begin
+    case $god['driver']
+    when 'stomp'
+        require "#{File.dirname(File.expand_path(__FILE__))}/drivers/stompdriver"
+        driver = StompDriver.new($god['stomp'], log)
+
+    when 'bunny'
+        require "#{File.dirname(File.expand_path(__FILE__))}/drivers/bunnydriver"
+        driver = BunnyDriver.new($god['bunny'], log)
+
+    when 'sqs'
+        require "#{File.dirname(File.expand_path(__FILE__))}/drivers/sqsdriver"
+        driver = SqsDriver.new($god['sqs'], log)
+
+    when 'scp'
+        log.error("Not implemented yet !")
+        exit
+
+    when 'local'
+        log.error("Not implemented yet !")
+        exit
+
+    when 'test'
+        log.info("msg = #{JSON.generate($msg)}")
+        exit
+    else
+        log.error("Illegal driver type !")
+    end
+rescue
+    log.error("Error initializing driver (#{$!})")
+    $msg['msgs'].push("Error initializing driver (#{$!})")
+end
+
+driver.connect()
+log.debug("Sending data to server : #{$msg.inspect}")
+driver.publish(JSON.generate($msg))
+driver.disconnect
+
+log.debug("collector finished!")
+

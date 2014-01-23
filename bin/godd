@@ -1,0 +1,364 @@
+#!/usr/local/bin/ruby18
+#----------------------------------------------------------------------------
+# eye-of-god: godd
+#
+# Daemon reading (subscribing to a queue) data sent from clients.
+# Save all data to client RRD files, writes updated confguration files
+# about servers, roles and groups.
+#
+# Usage: /..path../godd [-d|--debug] [log-file|console]
+#
+# (c) Atchik-Realtime A/S, Marts 2012
+#----------------------------------------------------------------------------
+
+# Make sure we find the right gems, both re-written (in air/lib/ruby) and god's own.
+$:.unshift("/home/air/lib/ruby")
+
+require 'rubygems'
+require 'yaml'
+require 'pp'
+require 'logger'
+require 'json'
+
+$hostname = %x[hostname -s].chomp
+$nmsg     = 0
+
+# Configurations files
+YAML_GOD        = File.dirname(__FILE__) + "/../config/god.yaml"
+YAML_SERVICES   = File.dirname(__FILE__) + "/../config/services.yaml"
+YAML_HOSTNAME   = File.dirname(__FILE__) + "/../config/#{$hostname}.yaml"
+YAML_ROLES      = File.dirname(__FILE__) + "/../config/roles.yaml"
+YAML_PROPERTIES = File.dirname(__FILE__) + "/../config/properties.yaml"
+YAML_DATASETS   = File.dirname(__FILE__) + "/../config/data-sets.yaml"
+
+debug    = false
+readonly = false
+log_file = "god.log"
+while (! ARGV[0].nil?) do
+    if ARGV[0].eql?("-d") or ARGV[0].eql?("--debug")
+        debug = true
+        ARGV.shift
+    elsif ARGV[0].eql?("-r") or ARGV[0].eql?("--readonly")
+        readonly = true
+        ARGV.shift
+    else
+        log_file = ARGV[0]
+        ARGV.shift
+    end
+end
+
+#----------------------------------------------
+# Setup logger
+begin
+    if log_file.eql?("console") or log_file.eql?("stdout")
+        log = Logger.new(STDOUT)
+    else
+        log = Logger.new(log_file, shift_age='daily')
+    end
+    log.level = Logger::INFO   # default
+    log.level = Logger::DEBUG if debug
+rescue
+    puts "ERROR: Unable to open log file <#{log_file}> (#{$!})"
+end
+        
+log.info("------------------------------------------------------------------------------------")
+log.info("Starting god daemon ... ")
+
+#----------------------------------------------
+# Read the configuration file(s)
+begin
+    $god = {}
+    if File.exists?(YAML_GOD)
+        $god = YAML.load_file(YAML_GOD) 
+        log.info("Configuration file <#{YAML_GOD}> read successfully.")
+    end
+
+    if File.exists?(YAML_HOSTNAME)
+        $god.merge!(YAML.load_file(YAML_HOSTNAME)) 
+        log.info("Configuration file <#{YAML_HOSTNAME}> merged.")
+    end
+
+    $svc = YAML.load_file(YAML_SERVICES)
+    log.info("Configuration file <#{YAML_SERVICES}> read successfully.")
+rescue
+    log.error("Error loading main configurationfiles (#{$!})")
+    exit
+end
+
+#-------------------------------------------------------
+# Read to auto generated "roles" and "properties" yaml files.
+
+$roles = YAML.load_file(YAML_ROLES) rescue $roles = {}
+log.info("Existing roles configured from <#{YAML_ROLES}> - '#{$roles.size}' roles defined.")
+
+$properties = YAML.load_file(YAML_PROPERTIES) rescue $properties = {}
+log.info("Existing properties configured from <#{YAML_PROPERTIES}> - '#{$properties.size}' properties defined.")
+
+$ds = YAML.load_file(YAML_DATASETS) rescue $ds = {}
+log.info("Existing data-sets configured from <#{YAML_DATASETS}> - '#{$ds.size}' data-sets defined.")
+
+#-------------------------------------------------------
+begin
+    log.debug("Sending data using driver '#{$god['driver']}'")
+    case $god['driver']
+    when 'stomp'
+        require "#{File.dirname(File.expand_path(__FILE__))}/drivers/stompdriver"
+        driver = Stompdriver.new($god['stomp'], log)
+
+    when 'bunny'
+        require "#{File.dirname(File.expand_path(__FILE__))}/drivers/bunnydriver"
+        driver = BunnyDriver.new($god['bunny'], log)
+
+    when 'sqs'
+        require "#{File.dirname(File.expand_path(__FILE__))}/drivers/sqsdriver"
+        driver = SqsDriver.new($god['sqs'], log)
+
+    when 'scp'
+        log.error("Not implemented yet !")
+        exit
+
+    when 'local'
+        log.error("Not implemented yet !")
+        exit
+
+    when 'test'
+        log.info("json = #{JSON.generate($json)}")
+        exit
+    else
+        log.error("Illegal driver type !")
+    end
+rescue
+    log.error("Error loading driver (#{$!})")
+    exit
+end
+
+
+# SIGINT / What about other signals ??
+Signal.trap("INT") {
+    log.warn "\n\nInterrupted - #{$nmsg} msg's processed."
+    driver.disconnect
+    exit
+}
+
+# register all servers, remove them if we don't hear anything for an hour
+$servers = {}
+
+# Main loop, daemon is running for-ever !
+while true
+    begin
+        # connect and subscribe to msg's
+        driver.connect
+        driver.subscribe do |msg_json| begin
+            log.debug("----------------------------")
+            $nmsg      += 1
+            #msg        = JSON.parse(msg_json[:payload])
+            msg        = JSON.parse(msg_json)
+            hostname   = msg['hostname']
+            now        = msg['time']
+            roles      = msg['roles']
+            properties = msg['properties']
+            msgs       = msg['msgs']
+
+            log.info("Package received from [#{hostname}]")
+            log.debug("time       = #{now} (#{Time.at(now.to_i)})")
+            log.debug("roles      = #{roles.inspect}")
+            log.debug("properties = #{properties.inspect}")
+            log.debug("data       = #{msg['data'].inspect}")
+
+            # update timestamp for the server
+            $servers[hostname] = Time.now
+
+            if roles.empty?
+                roles = ['unknown']
+                log.warn("No roles set, assigned to 'unknown'")
+            end
+
+            msgs.each { |m| 
+                log.info("Message => [#{m}]")
+            }
+
+            ds_write = false
+            $ds[hostname] = {} unless $ds.include?(hostname)
+
+            msg['data'].each do |data|
+                (service, output) = data.split(':', 2)
+                log.debug("*** service [#{service}] ***")
+                unless $ds[hostname].include?(service)
+                    ds_write = true
+                    $ds[hostname][service] = []
+                end
+
+                if $svc[service]['script_type'].match("dynamic")
+                	# ----------------------------------------
+                	# if dynamic service - all data-sets are stored in dedicated
+                	# RRD files. Create if needed - and update each of them
+                	output.each_line { |line|
+                	    meta = nil
+                	    if line.match(/.*\[.*\]:.*/)
+                	        m = line.strip.match(/(.*)\[(.*)\]:(.*)/)
+                	        label = m[1]
+                	        meta  = m[2]
+                	        rest  = m[3]
+                        else
+                	        (label,rest) = line.strip.split(":",2)
+                	        if label.nil? or rest.nil?
+                	            log.error("format error from service <#{service}> in line <#{line}>")
+                	            next
+            	            end
+                        end
+                        # Fix dataset label for invalid characters
+                        label.gsub!(/\W/, '')
+                        label = label[0 ..18]
+                	    values = rest.strip.split($svc[service]['separator'])
+                	    log.debug("label,values = #{label}, #{values.inspect}")
+
+                	    # -----------------------------------------------------------
+                	    # Figure out the rrdfile and metafile, create if not exist.
+                	    rrdfile  = "#{$god['rrddir']}/#{hostname}-#{service}-#{label}.rrd"
+                	    metafile = "#{$god['rrddir']}/#{hostname}-#{service}-#{label}.meta"
+                	    unless File.exist?(rrdfile)
+                    		# Setup rrdtool create command and execute ...
+                    		cmd = "#{$god['rrdtool']} create #{rrdfile} -s #{$svc[service]['step']*60} "
+                    		$svc[service]['ds'].each { |ds|  
+                    		    cmd = cmd + "#{ds} ".sub(/\{DS\}/, label)
+                    		}
+                    		$god['rrd']['rras'].each    { |rra| cmd += "#{rra} " }
+
+                    		log.debug("Create RRD: #{cmd}")
+                    		@out = %x[#{cmd}]
+                    		log.warn("output (#{$?}): #{@out}") unless @out.empty?
+                	    end
+                            # Write possible meta information
+                	    unless (meta.nil? or meta.empty?)
+                	        File.open(metafile, "w") { |f| 
+                	            f.puts meta
+                            }
+                        end
+
+                	    # --------------------------------------------------------
+                	    # get "rrdtool update" parameters
+                	    # feed rrdtool with datasets
+                	    cmd = "#{$god['rrdtool']} update #{rrdfile} #{now}:#{values.join(":")}"
+                	    log.debug("Update RRD: #{cmd}")
+                	    @out = %x[#{cmd}].strip
+                	    log.warn("output (#{$?}): #{@out}") unless @out.empty?
+
+                        # Update data-sets config file.
+                        unless $ds[hostname][service].include?(label)
+                            ds_write = true
+                            $ds[hostname][service].push(label)
+                        end
+                	}
+
+                else
+                	# ---------------------------------------------------------
+                	# if static type service, all data-sets are in one RRD file.
+                	# analyze output, split in datasets
+                	values = output.strip.split($svc[service]['separator'])
+                	log.debug("split by separator: #{values}")
+                        values.map! { |x| x = x.strip }
+                	log.debug("striped : #{values}")
+
+                	# -----------------------------------------------------------
+                	# Figure out the rrdfile, create if not exist.
+                	rrdfile = "#{$god['rrddir']}/#{hostname}-#{service}.rrd"
+                	unless File.exist?(rrdfile)
+                	    # Setup rrdtool create command and execute ...
+                	    cmd = "#{$god['rrdtool']} create #{rrdfile} -s #{$svc[service]['step']*60} "
+                	    $svc[service]['ds'].each { |ds|  cmd += "#{ds} " }
+                	    $god['rrd']['rras'].each    { |rra| cmd += "#{rra} " }
+
+                	    log.debug("Create RRD: #{cmd}")
+                	    @out = %x[#{cmd}].strip
+                	    log.warn("output (#{$?}): #{@out}") unless @out.empty?
+                	end
+
+                	# --------------------------------------------------------
+                	# get "rrdtool update" parameters
+                	# feed rrdtool with datasets
+                	cmd = "#{$god['rrdtool']} update #{rrdfile} #{now}:#{values.join(":")}"
+                	log.debug("Update RRD: #{cmd}")
+                	@out = %x[#{cmd}]
+                	log.warn("output (#{$?}): #{@out}") unless @out.empty?
+                	
+                end
+            end
+
+            # Lets update the "roles" and "properties" yaml
+            write = false
+            unless roles.nil?
+                roles.each { |role|
+                    $roles[role] = [] unless $roles.member?(role) # make sure the array is defined
+                    if not $roles[role].include?(hostname)
+                        $roles[role].push(hostname) 
+                        write = true
+                    end
+                }
+                # possible remove our host from a previously defined role
+                unless $roles.nil?
+                    $roles.keys.each { |role| 
+                        if $roles[role].include?(hostname) and not roles.include?(role)
+                            $roles[role].delete(hostname)
+                            write = true
+                        end
+                    }
+                end
+            end
+
+            unless properties.nil?
+                properties.each { |p|
+                    $properties[p] = [] unless $properties.member?(p)
+                    if not $properties[p].include?(hostname)
+                        $properties[p].push(hostname) 
+                        write = true
+                    end
+                }
+            end
+
+            # do cleanup if we haven't heard from a server in more than one hour
+            $servers.keys.each { |hostname|
+                if $servers[hostname] < Time.now-(3600*24)
+                    log.info("No information received from #{hostname} within one hour - cleaning")
+                    $servers.delete(hostname)
+                    $roles.keys.each { |role| 
+                        $roles[role].delete(hostname) if $roles[role].include?(hostname) }
+
+                    $properties.keys.each { |p| 
+                        $properties[p].delete(hostname) if $properties[p].include?(hostname)
+                    }
+                    $ds.delete(hostname)
+
+                    write = true
+                end
+            }
+
+            if write and not readonly
+                log.debug("role/hostname added to roles config file, dumping file.")
+                File.open(YAML_ROLES, "w") do |out|
+                    YAML.dump($roles, out)
+                end
+
+                log.debug("property/hostname added to properties config file, dumping file.")
+                File.open(YAML_PROPERTIES, "w") do |out|
+                    YAML.dump($properties, out)
+                end
+            end
+            if ds_write and not readonly
+                log.debug("service/data-set added to config file, dumping file.")
+                File.open(YAML_DATASETS, "w") do |out|
+                    YAML.dump($ds, out)
+                end
+            end
+
+
+            rescue
+                log.error("Unable to process data <#{msg_json}> (#{$!})")
+            end
+        end
+    end
+
+    log.warn("Retry in 10 sec.")
+    sleep(10)
+end
+
+

@@ -1,0 +1,59 @@
+#!/usr/local/bin/ruby
+#-----------------------------------------------------------------------------------
+# eye-of-god
+# update-amazon-serves
+# 
+# (c) Atchik-Realtime A/S, June 2010
+#-----------------------------------------------------------------------------------
+
+require 'yaml'
+require 'json'
+require 'pp'
+require 'net/http'
+require 'uri'
+
+#----------------------------------------------------------
+# Read the configuration file
+hostname = %x[hostname].chomp
+#$god = YAML.load_file($0.sub(/update-amazon-servers$/, "../config/god.#{hostname}.yaml")) rescue
+$god = YAML.load_file($0.sub(/update-amazon-servers$/, "../config/god.yaml"))
+cloud = {}
+
+# Ask broadway instance manager for a list of servers
+url = URI.parse('http://havana.realtime.dk:8001/meta-instance-manager-deployments/deployments')
+response = Net::HTTP.start(url.host, url.port) { |http|
+   http.get('/meta-instance-manager-deployments/deployments')
+}
+doc = response.body
+
+json = JSON.parse(doc)
+
+json['deployments'].each { |id,node|
+    theater = node['theater']['group']
+    stage = node['stage']['name']
+    if theater.eql?('amazon') and stage.eql?('prod')
+	node['roles'].each { |role,vars|
+	    @uri = vars['uri']
+	}
+	url = URI.parse(@uri)
+	server = url.host
+
+        # Build the yaml structure ...
+        cloud[server] = {} unless cloud[server]
+        cloud[server]['hostname'] = "#{url.host}:8001"
+        cloud[server]['services'] = $god['server']['cloud']['services']
+    end
+}
+
+puts "# Auto generated config file !! - Don't edit !!"
+puts "groups:"
+puts "    amazon-cloud: [ #{cloud.keys.join(', ')} ]"
+puts
+puts "server:"
+cloud.sort.each { |server, hash|
+    puts "    #{server}:"
+    puts "        hostname: #{cloud[server]['hostname']}"
+    puts "        services: [ #{cloud[server]['services'].sort{|x,y| x.match("response")? -1 : ( y.match("response")? 1 : x <=> y) }.join(', ')} ]"
+}
+
+

@@ -1,0 +1,606 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<head><title>Eye of God (<%= $hostname %>)</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<meta HTTP-EQUIV="Refresh" CONTENT="300">
+<link rel="stylesheet" type="text/css" href="../include/jquery.checkboxtree.css">
+<!-- <link rel="stylesheet" type="text/css" href="../include/themes/trontastic/jquery.ui.all.css"> -->
+<link rel="stylesheet" type="text/css" href="../include/themes/base/jquery.ui.all.css">
+<link rel="stylesheet" type="text/css" href="../include/themes/overcast/jquery.ui.all.css" class="theme">
+<link rel="stylesheet" type="text/css" href="../include/god.css">
+<script type="text/javascript" src="../include/jquery-1.6.2.min.js"></script>
+<script type="text/javascript" src="../include/jquery-ui-1.8.16.custom.min.js"></script>
+<script type="text/javascript" src="../include/jquery.cookie.js"></script>
+<script type="text/javascript" src="../include/jquery.json.js"></script>
+<script type="text/javascript" src="../include/jquery.checkboxtree.js"></script>
+<script type="text/javascript" src="../include/prefs.js"></script>
+
+
+<script type="text/javascript">
+
+var favorites = [];
+
+function showtree(obj)
+{
+    var servers="";
+
+    with(obj) {
+        for (var i=0; i<tree.length; i++) {
+            if (tree[i].checked) {
+                if (servers != "") { servers += ","; }
+                servers += tree[i].value;
+            }
+        }
+    }
+
+    if(servers == "") {
+        alert("You need to select some servers");
+    } else {
+        alert(servers);
+    }
+
+    return false;
+}
+
+function save_favorites(obj)
+{
+    var link = obj.name.value + "#" + obj.url.value;
+    if (favorites == null) {
+        favorites = [];
+    }
+    
+    favorites.push(link);
+    var json = $.JSON.encode(favorites);
+    $.cookie('god.favorites', json, { expires: 365 });
+
+    show_favorites();
+    return false;
+}
+
+function load_favorites()
+{
+    var json = $.cookie('god.favorites');
+    favorites = $.JSON.decode(json);
+
+    show_favorites();
+    // alert(html);
+}
+
+function delete_favorite(skip)
+{
+    favorites.splice(skip,1);
+    var json = $.JSON.encode(favorites);
+    $.cookie('god.favorites', json, { expires: 365 });
+    
+    show_favorites();
+    return false;
+}
+
+function show_favorites()
+{
+    var html = "";
+    if (favorites != null && favorites.length > 0) {
+        for (i=0;i<favorites.length;i++) {
+            urlpart = favorites[i].split("#");
+            html += "<li><a href='" + urlpart[1] + "'>" + urlpart[0] + "</a> - <span style='font-size: xx-small'><a href='#' onclick='delete_favorite(" + i + ");'>(d)</a></span>";
+        }
+    } else {
+        html = "No favorites saved yet.";
+    }
+    document.getElementById("links").innerHTML = html;
+}
+
+function hide_menus() {
+    $("#left").animate({height: 'hide'}, 300);
+    $("#right").animate({height: 'hide'}, 300);
+    $("#favorites").animate({height: 'hide'}, 300);
+    $("#config").animate({height: 'hide'}, 300);
+    $("#help").animate({height: 'hide'}, 300);
+
+    // $("#left, #right, #favorites, #config, #help").css("visible", false)
+}
+function resize_elements() {
+    width = $(window).width() - 25;
+    max_height = $(window).height() - 120;
+    $("#time, #graph, #help").css("width", width);
+    height = $("#left").height() + 10;
+    if (height > max_height) {
+        height = max_height;
+        $("#left, #right").css("height", height);
+    }
+    $(".selector-div").css("height", height-120);
+    $(".tree-div").css("height", height-120);
+
+    $("#xsize").val(width);
+    $("a").each(function (i) { 
+        this.href = this.href.replace(/xsize=\d+/, "xsize="+width);
+    });
+    <% if $graphs2.empty? %>  
+        img_width = width-10;
+    <% else %> 
+        img_width = width/2-5;
+    <% end %>
+    $("img[name=graph]").each(function (i) {
+        this.src = this.src.replace(/size=\d+/, "size="+img_width);
+    });
+}
+
+// Outside document.ready to avoid a "blink" of styles
+if($.cookie("god.css")) {
+    $("link.theme").attr("href",$.cookie("god.css"));
+}
+
+$(document).ready(function(){
+
+    $("#nav li a").click(function() { 
+        $("link.theme").attr("href",$(this).attr('rel'));
+        $.cookie("god.css",$(this).attr('rel'), {expires: 365});
+        return false;
+    });
+
+    $("#debug").click(function() { 
+        $.cookie("god.debug",this.checked, {expires: 365});
+    });
+
+    $("#configurationbutton").click(function(event) {
+        event.preventDefault();
+        if ($("#config").is( ":visible" )){
+            $("#config").animate({height: 'hide'}, 300);
+        } else {
+            hide_menus();
+            $("#config").animate({height: 'show'}, 300);
+        }
+    });
+    $("#config").hover(null, function() {
+        $("#config").animate({height: 'hide'}, 300);
+    });
+
+    $("#favoritesbutton").click(function(event) {
+        event.preventDefault();
+        if ($("#favorites").is( ":visible" )){
+            $("#favorites").animate({height: 'hide'}, 300);
+        } else {
+            hide_menus();
+            $("#favorites").animate({height: 'show'}, 300);
+            $("#url_name").focus();
+        }
+    });
+    $("#favorites").hover(null, function() {
+        $("#favorites").animate({height: 'hide'}, 300);
+    });
+
+    $("#leftbutton").click(function(event) {
+        event.preventDefault();
+        if ($("#left").is( ":visible" )){
+            $("#left").animate({height: 'hide'}, 300);
+        } else {
+            hide_menus();
+            $("#left").animate({height: 'show'}, 300);
+        }
+    });
+    $("#left").hover(null, function() {
+        $("#left").animate({height: 'hide'}, 300);
+    });
+
+    $("#rightbutton").click(function(event) {
+        event.preventDefault();
+        if ($("#right").is( ":visible" )){
+            $("#right").animate({height: 'hide'}, 300);
+        } else {
+            hide_menus();
+            $("#right").animate({height: 'show'}, 300);
+        }
+    });
+    $("#right").hover(null, function() {
+        $("#right").animate({height: 'hide'}, 300);
+    });
+
+    $("#helpbutton").click(function(event) {
+        event.preventDefault();
+        if ($("#help").is( ":visible" )){
+            $("#help").animate({height: 'hide'}, 300);
+        } else {
+            hide_menus();
+            $("#help").animate({height: 'show'}, 300);
+        }
+    });
+    $("#help").hover(null, function() {
+        $("#help").animate({height: 'hide'}, 300);
+    });
+
+    $(".leftbutton").button({ text: false, icons: {primary: "ui-icon-circle-triangle-s" } });
+    $(".rightbutton").button({ text: false, icons: {primary: "ui-icon-circle-triangle-s" } });
+    $(".clearbutton").button({ text: false, icons: {primary: "ui-icon-close" } });
+    $(".go24back").button({ text: false, icons: {primary: "ui-icon-seek-first" } });
+    $(".goback").button({ text: false, icons: {primary: "ui-icon-seek-prev" } });
+    $(".goforward").button({ text: false, icons: {primary: "ui-icon-seek-next" } });
+    $(".gonow").button({ text: false, icons: {primary: "ui-icon-seek-end" } });
+    $(".favoritesbutton").button({ text: false, icons: {primary: "ui-icon-star" } });
+    $(".configurationbutton").button({ text: false, icons: {primary: "ui-icon-wrench" } });
+    $(".helpbutton").button({ text: false, icons: {primary: "ui-icon-help" } });
+    $(".consolidate").button();
+    $(".formsubmit").button();
+});
+
+$(window).load(function()
+{
+    load_favorites();
+
+    $(".navigation").checkboxTree({
+        collapseDuration: 200,
+        expandDuration: 200,
+        initializeUnchecked: 'collapsed',
+        collapseUiIcon: 'ui-icon-plus',
+        expandUiIcon: 'ui-icon-minus',
+        leafUiIcon: 'ui-icon-bullet',
+        onCheck:   { ancestors: 'checkIfFull', descendants: 'check' },
+        onUncheck: { ancestors: 'uncheck' }
+    });
+
+    // $("#help").hide();
+    // $("#left").hide();
+    // $("#right").hide();
+    // $("#config").hide();
+    // $("#favorites").hide();
+
+    resize_elements(); 
+});
+
+$(window).resize(function(){
+    resize_elements();
+});
+
+</script>
+</head>
+
+<body>
+
+<div id="config" class="ui-widget-content ui-corner-all">
+
+    <div class="container">
+        <div class="col c45">
+            <a href="<%= $god['eyeofgodurl'] %>"><img src="../images/eye-of-god.png" width="180px" alt="eye-of-god" title="Helix Nebula" style="float: left"></a>
+            <h3>Eye Of God</h3>
+            <hr>
+            <p>Debug <input id="debug" type="checkbox" name="debug" value="on" <% if $debug.eql?("true")%> checked <% end %>/></p>
+        </div>
+        <div class="col c5">
+        </div>
+        <div class="col c45 last">
+            <span style="margin-left: 25px">Theme</span>
+            <ul id="nav">
+                <li><a href="#" rel="../include/themes/blitzer/jquery.ui.all.css">Blitzer</a></li>
+                <li><a href="#" rel="../include/themes/mint-choc/jquery.ui.all.css">Mint Choc</a></li>
+                <li><a href="#" rel="../include/themes/cupertino/jquery.ui.all.css">Cupertino</a></li>
+                <li><a href="#" rel="../include/themes/eggplant/jquery.ui.all.css">Eggplant</a></li>
+                <li><a href="#" rel="../include/themes/excite-bike/jquery.ui.all.css">Excite-bike</a></li>
+                <li><a href="#" rel="../include/themes/black-tie/jquery.ui.all.css">Black tie</a></li>
+                <li><a href="#" rel="../include/themes/dot-luv/jquery.ui.all.css">Dot luv</a></li>
+                <li><a href="#" rel="../include/themes/dark-hive/jquery.ui.all.css">Dark hive</a></li>
+                <li><a href="#" rel="../include/themes/flick/jquery.ui.all.css">Flick</a></li>
+                <li><a href="#" rel="../include/themes/hot-sneaks/jquery.ui.all.css">Hot sneaks</a></li>
+                <li><a href="#" rel="../include/themes/overcast/jquery.ui.all.css">Overcast</a></li>
+                <li><a href="#" rel="../include/themes/smoothness/jquery.ui.all.css">Smoothness</a></li>
+                <li><a href="#" rel="../include/themes/trontastic/jquery.ui.all.css">Trontastic</a></li>
+                <li><a href="#" rel="../include/themes/vader/jquery.ui.all.css">Vader</a></li>
+                <li><a href="#" rel="../include/themes/start/jquery.ui.all.css">Start</a></li>
+
+            </ul>
+        </div>
+    </div>
+</div>
+
+<div id="favorites" class="ui-widget ui-widget-content ui-corner-all">
+    <div cass="container">
+        <div class="favorites">
+        <p><b>Eye of God - favorites</b></p>
+        <hr><ul>
+            <% $god['favorites'].each { |f|  %>
+            <li><a href='<%= f['url'] %>'><%= f['name'] %></a>
+            <% } %>
+            </ul>
+        <hr>
+        <ul id="links">
+        </ul>
+        <hr>
+        <form id="favorite_form" onsubmit="return save_favorites(this);">
+            Save current setup as :
+            <input id="url_name" name="name" type=text size=15 value="">
+            <input name="url" type="hidden" value="<%= $god['homeurl'] %>?<%= $url_servers %><%= $url_tdiff %><%= $url_time %><%= $url_size %>">
+        </form>
+        </div> <!-- class favorites -->
+    </div>
+</div>
+
+<div id="left" class="ui-widget-content ui-corner-all">
+    <h3>Select left pane</h3>
+    <hr>
+    <form class="tree" name="leftform" method="get" action="<%= $god['homeurl'] %>">
+    <div class="col c40"> 
+    <span style="margin-left: 10px">Roles/Servers:</span>
+        <div class="ui-widget-content ui-corner-all tree-div">
+
+        <input type="hidden" name="group2"       value="<%= $group2.join(',') %>">
+        <input type="hidden" name="servers2"     value="<%= $servers2.join(',') %>">
+        <input type="hidden" name="properties2"  value="<%= $properties2.join(',') %>">
+        <input type="hidden" name="service2"     value="<%= $service2 %>">
+        <input type="hidden" name="showds"       value="<%= $showds %>">
+        <input type="hidden" name="tdiff"        value="<%= $tdiff %>">
+        <input type="hidden" name="time"         value="<%= $time %>">
+        <input type="hidden" name="xsize"        value="<%= $xsize %>">
+        <input type="hidden" name="consolidate2" value="<%= $consolidate2 %>">
+
+        <ul class="navigation">
+        <% $roles.sort.each do |group,servers| %>
+        <li><input type="checkbox" name="group1" value="<%= group %>"><a href="?group1=<%= group %><%= $url_time %><%= $url_tdiff %><%= $url_size %><%= $url_servers2 %>"><%= group %></a>
+            <ul>
+                <% servers.each do |server| %>
+                <li><input type="checkbox" name="servers1" value="<%= server %>"><a href="?group1=<%= group %>&amp;servers1=<%= server %>&amp;service1='na'<%= $url_time %><%= $url_tdiff %><%= $url_size %><%= $url_servers2 %>"><%= server %></a>
+                </li>
+                <% end %>
+            </ul>
+        </li>
+        <% end %>
+        </ul>
+        </div>
+    <center><input type="checkbox" class="consolidate" name="consolidate1" id="consolidate1"><label for="consolidate1">Consolidate</label></center>
+    </div>
+
+    <div class="col c30">
+    <span style="margin-left: 10px">Properties:</span>
+        <div class="ui-widget-content ui-corner-all selector-div">
+        <% $properties.keys.sort.each do |p| %>
+            <% if $properties1.include?(p) %>
+                <input type="checkbox" name="properties1" value="<%= p%>" selected /><a href="?properties1=<%= p %><%= $url_time %><%= $url_tdiff %><%= $url_size %><%= $url_servers2 %>"><%= p %></a><br>
+            <% else %>
+                <input type="checkbox" name="properties1" value="<%= p%>" /><a href="?properties1=<%= p %><%= $url_time %><%= $url_tdiff %><%= $url_size %><%= $url_servers2 %>"><%= p %></a><br>
+            <% end %>
+        <% end %>
+        </div>
+    </div>
+
+    <div class="col c30 last">
+    <span style="margin-left: 10px">Services:</span>
+        <div class="ui-widget-content ui-corner-all selector-div">
+        <% $services.keys.sort.each do |service| %>
+            <% if $service1.eql?(service) %>
+                <input type="radio" name="service1" value="<%= service%>" selected />
+            <% else %>
+                <input type="radio" name="service1" value="<%= service%>" />
+            <% end %>
+            <a href="?group1=<%= $group1.join(',') %>&amp;servers1=<%= $servers1.join(',') %>&amp;service1=<%= service %><%= $url_servers2 %><%= $url_time %><%= $url_size %>"><%= service %></a><br>
+        <% end %>
+        </div>
+        <center><input type="submit" class="formsubmit" value="Show"></center>
+    </div>
+    </form>
+</div> <!-- left menu -->
+
+<div id="right" class="ui-widget-content ui-corner-all">
+    <h3>Select right pane</h3>
+    <hr>
+    <form class="tree" name="rightform" method ="get" action="<%= $god['homeurl'] %>">
+    <div class="col c40"> 
+    <span style="margin-left: 10px">Roles/Servers:</span>
+        <div class="ui-widget-content ui-corner-all tree-div">
+        
+        <input type="hidden" name="group1"       value="<%= $group1.join(',') %>">
+        <input type="hidden" name="servers1"     value="<%= $servers1.join(',') %>">
+        <input type="hidden" name="properties1"  value="<%= $properties1.join(',') %>">
+        <input type="hidden" name="service1"     value="<%= $service1 %>">
+        <input type="hidden" name="showds"       value="<%= $showds %>">
+        <input type="hidden" name="tdiff"        value="<%= $tdiff %>">
+        <input type="hidden" name="time"         value="<%= $time %>">
+        <input type="hidden" name="xsize"        value="<%= $xsize %>">
+        <input type="hidden" name="consolidate1" value="<%= $consolidate1 %>">
+
+            <ul class="navigation">
+            <% $roles.sort.each do |group,servers| %>
+            <li><input type="checkbox" name="group2" value="<%= group %>"><a href="?group2=<%= group %><%= $url_time %><%= $url_tdiff %><%= $url_size %><%= $url_servers1 %>"><%= group %></a>
+                <ul>
+                    <% servers.each do |server| %>
+                    <li><input type="checkbox" name="servers2" value="<%= server %>"><a href="?group2=<%= group %>&amp;servers2=<%= server %>&amp;service2='na'<%= $url_time %><%= $url_tdiff %><%= $url_size %><%= $url_servers1 %>"><%= server %></a>
+                    </li>
+                    <% end %>
+                </ul>
+            </li>
+            <% end %>
+            </ul>
+        </div>
+    <center><input type="checkbox" class="consolidate" name="consolidate2" id="consolidate2"><label for="consolidate2">Consolidate</label></center>
+    </div>
+
+    <div class="col c30">
+    <span style="margin-left: 10px">Properties:</span>
+        <div class="ui-widget-content ui-corner-all selector-div">
+        <% $properties.keys.sort.each do |p| %>
+            <% if $properties2.include?(p) %>
+                <input type="checkbox" name="properties2" value="<%= p%>" selected /><a href="?properties2=<%= p %><%= $url_time %><%= $url_tdiff %><%= $url_size %><%= $url_servers1 %>"><%= p %></a><br>
+            <% else %>
+                <input type="checkbox" name="properties2" value="<%= p%>" /><a href="?properties2=<%= p %><%= $url_time %><%= $url_tdiff %><%= $url_size %><%= $url_servers1 %>"><%= p %></a><br>
+            <% end %>
+        <% end %>
+        </div>
+    </div>
+
+    <div class="col c30 last">
+    <span style="margin-left: 10px">Services:</span>
+        <div class="ui-widget-content ui-corner-all selector-div">
+        <% $services.keys.sort.each do |service| %>
+            <% if $service2.eql?(service) %>
+                <input type="radio" name="service2" value="<%= service%>" selected />
+            <% else %>
+                <input type="radio" name="service2" value="<%= service%>" />
+            <% end %>
+            <a href="?group2=<%= $group2.join(',') %>&amp;servers2=<%= $servers2.join(',') %>&amp;service2=<%= service %><%= $url_servers1 %><%= $url_time %><%= $url_size %>"><%= service %></a><br>
+        <% end %>
+        </div>
+        <center><input type="submit" class="formsubmit" value="Show"></center>
+    </div>
+    </form>
+</div> <!-- right menu -->
+
+<div id="help" class="ui-widget-content ui-corner-all">
+    <div class="col c60">
+        <div class="container margin">
+        <h2>Eye-of-god</h2>
+        <p>Click the graphs to see specified server or detailed services. Select servers/services in one or two columns,
+           and navigate back in time using timespan selector and arrow buttons.</p>
+        <p>Buttons :</p>
+        <button class="small leftbutton">link</button> : Select roles/servers and properties in each column. Choose optional consolidation or service.<br>
+        <button class="small clearbutton">link</button> : Clear rigth pane<br>
+        <button class="small go24back">link</button> : Go back 24 hour in time<br>
+        <button class="small goback">link</button> : Go back selected timespan<br>
+        <button class="small goforward">link</button> : Go forward selected timespan<br>
+        <button class="small gonow">link</button> : Jump to now<br>
+        <button class="small favoritesbutton">link</button> : Select/Save your favorite setup's<br>
+        <button class="small configurationbutton">link</button> : Change configuration<br>
+        <button class="small helpbutton">link</button> : Help<br>
+        </div>
+    </div>
+
+    <div class="col c40 last">
+        <div class="container margin">
+        <h3>Changelog</h3>
+        <dl>
+            <dt>12-Oct-11:</dt>
+                <dd>- Changed service selector for faster access.</dd>
+                <dd>- Fixed autohide on selection menu.</dd>
+                <dd>- Added button to clear right pane.</dd>
+            <dt>23-Sep-11:</dt>
+                <dd>- Added multi-selector for servers/groups.</dd>
+                <dd>- All layout and icons is now made using jquery-ui themes.</dd>
+            <dt>08-Sep-11:</dt>
+                <dd>- Minor update of cookie based "favorites".</dd>
+            <dt>25-Aug-11:</dt>
+                <dd>- All new layout, possible to choose freely in two panes.</dd>
+            <dt>30-Mar-12:</dt>
+                <dd>- Backend completely re-designed for clouds.</dd>
+                <dd>- selection using roles/properties.</dd>
+                <dd>- consolidated graphs, themes selections.</dd>
+            <dt>22-May-12:</dt>
+                <dd>- Changed graph titles to reflect consolidated names.</dd>
+            <dt>25-May-12:</dt>
+                <dd>- Added optional more then one graph for each service.</dd>
+                <dd>- Changed bunny (rabbitmq) driver to use a durable exchange/queue.</dd>
+        </dl>
+        </div>
+    </div>
+</div>
+
+<div id="time" class="ui-widget-header ui-corner-all" style="width:<%= $xsize %>px">
+
+    <form name="timeform" action="<%= $god['homeurl'] %>">
+    <table cellpadding="0" cellspacing="0" width="100%"><tr><td>
+        &nbsp;
+    </td><td align="left">
+        <a href="#" id="leftbutton" class="leftbutton" title="Select left pane">link</a>
+
+    </td><td>
+    
+        <input type="hidden" name="group1"       value="<%= $group1.join(',') %>">
+        <input type="hidden" name="group2"       value="<%= $group2.join(',') %>">
+        <input type="hidden" name="servers1"     value="<%= $servers1.join(',') %>">
+        <input type="hidden" name="servers2"     value="<%= $servers2.join(',') %>">
+        <input type="hidden" name="properties1"  value="<%= $properties1.join(',') %>">
+        <input type="hidden" name="properties2"  value="<%= $properties2.join(',') %>">
+        <input type="hidden" name="service1"     value="<%= $service1 %>">
+        <input type="hidden" name="service2"     value="<%= $service2 %>">
+        <input type="hidden" name="showds"       value="<%= $showds %>">
+        <input type="hidden" name="consolidate1" value="<%= $consolidate1 %>">
+        <input type="hidden" name="consolidate2" value="<%= $consolidate2 %>">
+        <input type="hidden" name="tdiff"        value="<%= $tdiff %>">
+        <input type="hidden" name="xsize"        value="<%= $xsize %>">
+  
+        Time: <select name="time" onchange="form.submit();">
+            <% $timeselects.each do |label,value| %>
+                <% if $time.eql?(value.to_s) %>
+    	            <option value="<%= value %>" selected><%= label %></option>
+    	        <% else %>
+    	            <option value="<%= value %>"><%= label %></option>
+    	        <% end %>
+            <% end %>
+    	   </select>
+    </td><td>
+    	 <a href="<%= $back24_href %>"  title="Go Backward 24h" id="go24back"  class="go24back">link</a>
+    	 <a href="<%= $back_href %>"    title="Go Backward"     id="goback"    class="goback">link</a>
+    	 <a href="<%= $forward_href %>" title="Go Forward"      id="goforward" class="goforward">link</a>
+    	 <a href="<%= $now_href %>"     title="Go to Now"       id="gonow"     class="gonow">link</a>
+    </td><td>
+        <% if $tdiff.to_i != 0 %><span style="color: #F11"><% end %>
+            <%= (Time.new-($time.to_i+$tdiff.to_i)*60*60).strftime("%d %b %H:%M") %>
+         -> <%= (Time.new-$tdiff.to_i*60*60).strftime("%d %b %H:%M") %>
+        <% if $tdiff.to_i != 0 %></span><% end %>
+    </td><td align="right">
+        <a href ="#" title="Favorites"     id="favoritesbutton"     class="favoritesbutton">link</a>
+        <a href ="#" title="Configuration" id="configurationbutton" class="configurationbutton">link</a>
+        <a href ="#" title="Help"          id="helpbutton"          class="helpbutton">link</a>
+    </td><td>
+        &nbsp;
+    </td><td align="right">
+        <a href="?<%= $url_servers1 %><%= $url_size %><%= $url_time %>" id="clearbutton" class="clearbutton" title="Clear right pane">link</a>
+        <a href="#" id="rightbutton" class="rightbutton" title="Select right pane">link</a>
+    </td></tr></table>
+    </form>
+</div> <!-- class time -->
+
+<div id="spacer">&nbsp;</div>
+
+<div id="graph" class="ui-widget-header ui-corner-all" style="width:<%= $xsize %>px;">
+	<table border=0 cellspacing=5 cellpadding=0>
+	<% $graphs1.each do |url,href| %>
+	    <tr>
+	    <% if url.nil? or url.empty? %>
+	        <td>&nbsp;</td>
+	    <% elsif href.nil? or href.empty? %>
+	        <td><img name="graph" src='<%= url %><%= $url_colors %>' border='0' alt="img" class="ui-corner-all"></td>
+	    <% else %>
+	        <td><a href="<%= href %>"><img name="graph" src='<%= url %><%= $url_colors %>' border='0' alt="img" class="ui-corner-all"></a></td>
+	    <% end %>
+	    
+	    <% if $graphs2.empty? %>
+	        <td>&nbsp;</td>
+	    <% else %>
+		    <% (url2,href2) = $graphs2.shift %>
+		    <% if href2.nil? or href2.empty? %>
+	            <td><img name="graph" src='<%= url2 %><%= $url_colors %>' border='0' alt="img" class="ui-corner-all"></td>
+     	    <% else %>
+	            <td><a href="<%= href2 %>"><img name="graph" src='<%= url2 %><%= $url_colors %>' border='0' alt="img" class="ui-corner-all"></a></td>
+     	    <% end %>
+	    <% end %>
+        </tr>
+	<% end %>
+    </table>
+</div> <!-- class graph -->
+<% if $debug.eql?("true") %>
+    <table width="100%"><tr>
+        <td valign="top">
+            <ul>
+                <li>group1 = <%= $group1.join(',') %>
+                <li>servers1 = <%= $servers1.join(',') %>
+                <li>properties1 = <%= $properties1.join(',') %>
+                <li>service1 = <%= $service1 %>
+                <li>consolidate1 = <%= $consolidate1 %>
+                <li>showds = <%= $showds %>
+            </ul>
+        </td>
+        <td valign="top">
+            <ul>
+                <li>group2 = <%= $group2.join(',') %>
+                <li>servers2 = <%= $servers2.join(',') %>
+                <li>properties2 = <%= $properties2.join(',') %>
+                <li>service2 = <%= $service2 %>
+                <li>consolidate2 = <%= $consolidate2 %>
+            </ul>
+        </td>
+        <td valign="top">
+            <ul>
+                <% $cgi.inspect.split(/,/).each do |i| %>
+                <li><%= CGI::escapeHTML(i) %>
+                <% end %>
+            </ul>
+        </td>
+    </tr></table>
+<% end %>
+</body>
+</html>

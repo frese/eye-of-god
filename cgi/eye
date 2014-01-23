@@ -1,0 +1,240 @@
+#!/usr/local/bin/ruby18
+#-----------------------------------------------------------------------------------
+# eye-of-god
+# the eye: generate a graph, using rrdtool, for a certain host / service
+# 
+# Arguments
+#       server:  usually the same as hostname - but could be another host
+#       service: the service for which to generate the graph.
+#       time:    the number of hours from start to end for the graph.
+#       tdff:   number of hours from before 'now', where the graph should end.
+#       size:    xsize of the graph (currently ysize is hardcoded)
+#                (well - ysize can variate a lot depending on labels, comments etc.)
+#
+# (c) Atchik-Realtime A/S, Feb 2009
+#-----------------------------------------------------------------------------------
+
+require 'yaml'
+require 'erb'
+require 'cgi'
+require 'pp'
+
+$hostname = %x[hostname -s].chomp
+
+# configuration files
+YAML_GOD      = File.dirname(__FILE__) + "/../config/god.yaml"
+YAML_HOSTNAME = File.dirname(__FILE__) + "/../config/#{$hostname}.yaml"
+YAML_SERVICES = File.dirname(__FILE__) + "/../config/services.yaml"
+YAML_DATASETS = File.dirname(__FILE__) + "/../config/data-sets.yaml"
+
+#----------------------------------------------
+# Get a color based on hash value of string
+def color(str)
+    hash=23
+    0.upto(str.length-1) { |i|
+	hash = (hash * 31) + str[i].ord
+    }
+    n = hash % $god['rrd']['colors'].length
+    return $god['rrd']['colors'][n]
+end
+
+#----------------------------------------------------------
+# Init and read some cgi paramters
+cgi = CGI.new
+$server  = cgi['server']    # the server (possible a comma seperated list of servers)
+$group   = cgi['group']     # optional group name, used in title, otherwise server(s) are used.
+$service = cgi['service']   # the service to show
+$ds      = cgi['ds']        # optional "ds" - only show part of a dynamic service
+$graph   = cgi['graph']     # optional, if more than one graph defined for the data-set, the first one is done
+$time    = cgi['time']      # the number of hours shown in the graph
+$tdiff   = cgi['tdiff']     # the number of hours from now, where the graph should end.
+$size    = cgi['size']      # xsize of the graph, ysize is hardcoded
+$bcolor  = cgi['bcolor']    # background color - default 0x987
+$fcolor  = cgi['fcolor']    # font       color - default 0x111
+$scolor  = cgi['scolor']    # shade      color - default 0x666
+$ccolor  = cgi['ccolor']    # canvas     color - default 0xFFF
+$debug   = cgi['debug']
+
+# Set default size of graphs if not specified
+$size = 800 if $size.nil? or $size.empty?
+# corrections for old version of rrdtool, this version specifies the inner size.
+$size = $size.to_i - 97
+
+# set default colors
+$bcolor="444" if $bcolor.nil? or $bcolor.empty? # background
+$fcolor="F63" if $fcolor.nil? or $fcolor.empty? # fontcolor
+$scolor="222" if $scolor.nil? or $scolor.empty? # shade color
+$ccolor="EEE" if $ccolor.nil? or $ccolor.empty? # canvas color
+
+# make sure ds and graph is valid before we use it in the title
+$ds = "" if $ds.nil?
+$graph = "graph" if $graph.nil? or $graph.empty?
+$rest  = $graph.delete("graph")
+
+# do the same "magic" as in godd, to make sure it's a valid name
+$ds.gsub!(/\W/, '')
+$ds = $ds.slice(0..18)
+#$ds = $ds[0..18]  ## this is the version for ruby 1.9+
+
+#----------------------------------------------------------
+# Read the configuration file
+$god = YAML.load_file(YAML_GOD)
+$god.merge!(YAML.load_file(YAML_HOSTNAME)) if File.exists?(YAML_HOSTNAME)
+$svc = YAML.load_file(YAML_SERVICES)
+$dss = YAML.load_file(YAML_DATASETS)    # rescue $ds = {}
+
+# --------------------------------------------------------
+# Figure out the rrdfile, both dynamic ans static ones
+if $server.match(/,/)
+    rrdfile_static = []
+    rrdfile_dynamic = []
+    $server.split(/,/).each { |srv|
+        rrdfile_static.push("#{$god['rrddir']}/#{srv}-#{$service}.rrd")
+        rrdfile_dynamic.push("#{$god['rrddir']}/#{srv}-#{$service}-*.rrd")
+    }
+else
+    rrdfile_static  = "#{$god['rrddir']}/#{$server}-#{$service}.rrd"
+    rrdfile_dynamic = "#{$god['rrddir']}/#{$server}-#{$service}-*.rrd"
+end
+
+#----------------------------------------------------------
+# Get RRD parameters to generate a nice graph
+#
+colors = "-c BACK##{$bcolor} -c CANVAS##{$ccolor} -c SHADEA##{$scolor} -c SHADEB##{$scolor} -c FONT##{$fcolor}"
+timing = "--start end-#{$time}h"
+timing += " --end now-#{$tdiff}h" if $tdiff.to_i > 0
+unless $group.empty?
+  titles = "--title \"#{$svc[$service]['hlabel'+$rest]} - #{$ds} - #{$group}\" --vertical-label \"#{$svc[$service]['vlabel'+$rest]}\""
+else
+  titles = "--title \"#{$svc[$service]['hlabel'+$rest]} - #{$ds} - #{$server}\" --vertical-label \"#{$svc[$service]['vlabel'+$rest]}\""
+end
+sizing = "--width #{$size} --height 157"
+
+cmd = "#{$god['rrdtool']} graph -  #{colors} #{timing} #{titles} #{sizing} #{$svc['flags']}"
+
+# set default data-set ds=total if it's empty
+$ds = "total" if $ds.empty?
+
+# Now append the drawing options, depending on static/dynamic service
+if $svc[$service]['script_type'].match('dynamic')
+    file = "#{$god['rrddir']}/#{$server}-#{$service}-#{$ds}.rrd"
+    if File.exist?(file)
+         # try to fetch optional "meta" information
+        meta = ""
+        open(file.sub("\.rrd", ".meta"), "r") { |f| meta = f.gets.chomp } rescue meta = "n/a"
+
+     	$svc[$service][$graph].each { |line|
+     	    l = line.sub(/\{RRD\}/, file)
+     	    l.gsub!(/\{DS\}/, $ds)
+     	    l.gsub!(/\{META\}/, meta)
+     	    ds_match = l.match(/.*:(.*)[=#].*/)
+     	    l.sub!(/\{COLOR\}/, color(ds_match[1])) unless ds_match.nil?
+     	    cmd += " #{l}"
+     	}        
+    else
+        # find data-sets
+        datasets = []
+        $server.split(/,/).each { |srv| datasets += $dss[srv][$service] unless $dss[srv][$service].nil? }
+        datasets.sort!.uniq!
+
+        datasets = [$ds] if datasets.include?($ds)
+
+        # run through all data-sets defined for the server(s)
+        datasets.each do |ds|
+            $svc[$service][$graph].each do |line|
+            
+                m = line.match(/^DEF:(.+)=\{RRD\}:(.+)/)
+                if not m.nil?                      # lines with "DEF:...."
+
+                    if $server.match(/,/)      # several servers
+                        vname = m[1].gsub(/\{DS\}/,ds)
+                        rest  = m[2].gsub(/\{DS\}/,ds)
+                        x     = "A"
+                        cdef  = " CDEF:#{vname}="
+                        n     = 0
+                        $server.split(/,/).each do |srv|
+
+                            rrd = "#{$god['rrddir']}/#{srv}-#{$service}-#{ds}.rrd"
+                            next unless File.exist?(rrd)
+                            cmd += " DEF:#{x}#{vname}=#{rrd}:#{rest}"
+                            cdef += "#{x}#{vname},UN,0,#{x}#{vname},IF,"
+                            x = (x[0].ord+1).chr
+                            #  x = (x.ord+1).chr  // this is the version for ruby 1.9+
+                            n += 1
+                        end
+                        # ($server.split(/,/).count-1).downto(1) { cdef += "+," }
+                        (n-1).downto(1) { cdef += "+," }
+                        cmd += " #{cdef.chomp(',')}"
+                    else                    # one server
+                        rrd = "#{$god['rrddir']}/#{$server}-#{$service}-#{ds}.rrd"
+                        l = line.sub(/\{RRD\}/, rrd)
+                        l.gsub!(/\{DS\}/, ds)
+                        cmd += " #{l}"
+                    end
+                else                               # other lines than "DEF:..."
+                    # we use to meta values from the first server if more than one
+                    rrd = "#{$god['rrddir']}/#{$server.split(/,/)[0]}-#{$service}-#{ds}.rrd"
+
+                    # try to fetch optional "meta" information
+                    meta = ""
+                    open(rrd.sub("\.rrd", ".meta"), "r") { |f| meta = f.gets.chomp } rescue meta = "n/a"
+
+                    l = line.sub(/\{RRD\}/, rrd)
+                    l.gsub!(/\{DS\}/, ds)
+                    l.gsub!(/\{META\}/, meta)
+                    ds_match = l.match(/.*:(.*)[=#].*/)
+                    l.sub!(/\{COLOR\}/, color(ds_match[1])) unless ds_match.nil?
+                    cmd += " #{l}"
+                end
+
+            end
+        end
+
+    end
+else   # ------------  static services  ------------------
+    if $server.match(/,/)
+        $svc[$service][$graph].each { |line|
+            m = line.match(/^DEF:(\w+)=\{RRD\}:(.*)/)
+            unless m.nil?
+                vname = m[1]
+                rest  = m[2]
+                x     = "A"
+                cdef  = " CDEF:#{vname}="
+                rrdfile_static.each do |rrd|
+                    cmd += " DEF:#{x}#{vname}=#{rrd}:#{rest} "
+                    cdef += "#{x}#{vname},UN,0,#{x}#{vname},IF,"
+                    #x = (x.ord+1).chr
+                    x = (x[0].ord+1).chr
+                end
+                (rrdfile_static.length-1).downto(1) { cdef += "+," }
+                cmd += " #{cdef.chomp(',')} "
+            else
+                ds_match = line.match(/.*:(.*)[=#].*/)
+                line.sub!(/\{COLOR\}/, color(ds_match[1])) unless ds_match.nil?
+                cmd += " #{line} "
+            end
+        }
+    else
+        $svc[$service][$graph].each { |line|
+        	line.sub!(/\{RRD\}/, rrdfile_static)
+        	ds_match = line.match(/.*:(.*)[=#].*/)
+        	line.sub!(/\{COLOR\}/, color(ds_match[1])) unless ds_match.nil?
+        	cmd += " #{line} "
+        }
+    end
+end
+#
+# This cgi is a bit raw, we let rrdtool generate the png file to stdout.
+if $debug.empty?
+    printf "Content-Type: image/png\n\n"
+    system(cmd)
+else
+    printf "Content-Type: text/plain\n\n"
+    puts cmd
+end
+
+#rescue Exception => e
+#printf "Content-Type: text/plain\n\n"
+#puts "ERROR: Can't read config files ?"
+#exit
+#end
