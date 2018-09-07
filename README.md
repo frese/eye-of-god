@@ -1,6 +1,8 @@
 Eye-of-God:  A Server surveillance system. -- Version 2.0, July 2011
 ======================================================================
 
+![Screenshot](screenshot.png)
+
 Eye-of-god is server surveillance / monitor system build with simplicity in mind.
 It's not a new alarm system, it's not capable of sending mails or messages of
 any kind. If you need this - have a look at "Nagios" or similar systems.
